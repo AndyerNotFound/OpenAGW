@@ -187,4 +187,4 @@ Tests: `node test/balance_test.js` (77 balance-passthrough / routing assertions)
 
 ## License
 
-[GPL-3.0](LICENSE)
+[AGPL-3.0](LICENSE)
