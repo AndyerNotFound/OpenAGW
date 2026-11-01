@@ -18,7 +18,6 @@ function makeDirectPipe(res, rpInc, isStream, opts) {
   const isSSE = !!(opts && opts.isSSE != null ? opts.isSSE : isStream);
   const appendDone = !(opts && opts.appendDone === false);
   let buf = '';
-  let lastObj = null;
   let closed = false;
   let finished = false;
   let sawDone = false;
@@ -44,8 +43,8 @@ function makeDirectPipe(res, rpInc, isStream, opts) {
     if (isDoneEvent(ev)) { sawDone = true; return; }
     lastEventName = ev.event || lastEventName;
     if (ev.id != null) lastEventId = ev.id;
-    const j = safeParse(ev.data);
-    if (!j || typeof j !== 'object') {
+    if (!rpInc.length) {
+      // no rewrite rules: forward byte-for-byte without JSON.parse; keep the multi-line split behaviour
       if (ev.dataLines.length > 1) {
         let each = true;
         for (const l of ev.dataLines) { const t = l.trim(); if (t !== '' && t !== '[DONE]' && !jsonish(t)) { each = false; break; } }
@@ -57,11 +56,15 @@ function makeDirectPipe(res, rpInc, isStream, opts) {
           return;
         }
       }
-      const lines = rpInc.length ? ev.dataLines.map(l => rpApplyText(l, rpInc)) : ev.dataLines;
+      write(ev.raw || serializeEvent(ev, ev.dataLines));
+      return;
+    }
+    const j = safeParse(ev.data);
+    if (!j || typeof j !== 'object') {
+      const lines = ev.dataLines.map(l => rpApplyText(l, rpInc));
       write(serializeEvent({ event: ev.event, id: ev.id, retry: ev.retry }, lines));
       return;
     }
-    lastObj = j;
     let dirty = false;
     if (rpInc.length) { try { rpWalk(j, rpInc, 0, true); dirty = true; } catch (_) {} }
     if (dirty) writeEventObj(j, ev);
@@ -81,7 +84,6 @@ function makeDirectPipe(res, rpInc, isStream, opts) {
       if (out) write(out);
       return;
     }
-    lastObj = j;
     let dirty = false;
     if (rpInc.length) { try { rpWalk(j, rpInc, 0, true); dirty = true; } catch (_) {} }
     if (dirty) write(JSON.stringify(j));
