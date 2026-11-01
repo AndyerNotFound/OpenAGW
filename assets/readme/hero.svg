@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400" role="img" aria-labelledby="t d">
-  <title id="t">ai-gateway</title>
-  <desc id="d">One local endpoint for every AI API dialect: OpenAI, Claude and Gemini clients are converted in every direction and routed to any upstream, with per-channel proxies, key round-robin and failover.</desc>
+  <title id="t">OpenAGW</title>
+  <desc id="d">OpenAGW: one local endpoint for every AI API dialect: OpenAI, Claude and Gemini clients are converted in every direction and routed to any upstream, with per-channel proxies, key round-robin and failover.</desc>
   <defs>
     <marker id="ab" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#4796E3"/></marker>
     <marker id="ag" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#10A37F"/></marker>
@@ -12,8 +12,8 @@
   <g font-family="ui-monospace,SFMono-Regular,Menlo,monospace">
     <text x="64" y="86" font-size="17" letter-spacing="1.5" fill="#8B949E">ZERO-DEPS · NODE 18+ · TERMUX-NATIVE</text>
   </g>
-  <text x="64" y="162" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="62" font-weight="700" fill="#E6EDF3">ai-gateway</text>
-  <rect x="412" y="116" width="16" height="50" fill="#3FB950"/>
+  <text x="64" y="162" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="62" font-weight="700" fill="#E6EDF3">OpenAGW</text>
+  <rect x="368" y="116" width="16" height="50" fill="#3FB950"/>
   <text x="64" y="206" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="24" fill="#C9D1D9">One endpoint for every AI API dialect.</text>
   <g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="19" fill="#8B949E">
     <text x="64" y="240">Clients speak OpenAI, Claude or Gemini — the gateway</text>
@@ -44,7 +44,7 @@
 
     <!-- gateway core -->
     <rect x="844" y="100" width="124" height="178" rx="12" fill="#1C2333" stroke="#3A4358"/>
-    <text x="906" y="140" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="19" font-weight="700" fill="#E6EDF3">ai-gateway</text>
+    <text x="906" y="140" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="19" font-weight="700" fill="#E6EDF3">OpenAGW</text>
     <text x="906" y="166" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="16" fill="#3FB950">● :16384</text>
     <line x1="858" y1="186" x2="954" y2="186" stroke="#30363D"/>
     <g font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="18" fill="#8B949E">

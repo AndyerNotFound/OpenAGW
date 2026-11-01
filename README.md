@@ -1,7 +1,7 @@
 # OpenAGW — one endpoint for every AI API dialect
 
 <p align="center">
-  <img src="./assets/readme/hero.svg" width="100%" alt="ai-gateway: clients speaking the OpenAI, Claude or Gemini formats connect to one local gateway, which converts every direction and routes to any upstream with per-channel proxies, key round-robin and failover">
+  <img src="./assets/readme/hero.svg" width="100%" alt="OpenAGW: clients speaking the OpenAI, Claude or Gemini formats connect to one local gateway, which converts every direction and routes to any upstream with per-channel proxies, key round-robin and failover">
 </p>
 
 A **zero-dependency** Node.js gateway (born on Termux, happy on any Linux / macOS box): accept requests from **any** AI client, serve them from **any** upstream — OpenAI, Claude, and Gemini formats are converted in every direction, streaming included. Outbound traffic can ride a per-channel **SOCKS5 / HTTP proxy**.
@@ -9,7 +9,7 @@ A **zero-dependency** Node.js gateway (born on Termux, happy on any Linux / macO
 ```text
 Client (any dialect)                       Upstream (any dialect)
 OpenAI ──┐                            ┌──▶  OpenAI official / DeepSeek / relays / llama.cpp
-Claude ──┼──▶  ai-gateway :16384  ────┼──▶  Gemini official
+Claude ──┼──▶  OpenAGW :16384  ──────┼──▶  Gemini official
 Gemini ──┘    convert ⇄ redact       └──▶  Claude official
               balance ⇄ proxy              direct, or per-channel SOCKS5 / HTTP proxy
 ```
@@ -19,25 +19,11 @@ Gemini ──┘    convert ⇄ redact       └──▶  Claude official
 - **Keys stay flexible** — one model name on several channels: round-robin rotation, automatic failover on 429 / 401 / 5xx / connection errors, invisible switching.
 - **Zero npm dependencies** — if Node.js runs, it runs. No `npm install`, no build step.
 
----
+## Proven, not promised
 
-## About OpenAGW
-
-OpenAGW is the unified successor of two earlier projects by the same maintainer: its
-codebase is **ai-gateway-AI** (the actively developed gateway), with the traffic-distribution
-features of **ai-gateway-core** merged back in. The architecture, direction and acceptance
-testing are the maintainer's; implementation was assisted by AI coding tools.
-
-**Distribution merge (2026-11-01) — model references.** Ported from ai-gateway-core:
-when the same model name is served by several channels (or instances), `/v1/models`
-additionally exposes one composite id per source, `instance:channel:model`. Requesting a
-composite id pins that exact channel (verified first — the named channel must really serve
-the model; routing, billing and logs use the real model name). Plain names keep working
-unchanged and still round-robin across every serving channel. Instance/channel segments
-match tolerantly (case, spaces and hyphens are interchangeable). Covered by
-`node test/modelref_test.js`.
-
----
+- **16 test suites · 311 assertions — all green.** Every suite is standalone: `node test/<name>_test.js`, no install, no build step.
+- The full converter matrix (all 9 dialect pairs, streaming and not) plus proxy / auth / failover E2E pass in the maintainer's sandbox — **215/215**.
+- Nothing to download for the gateway itself — the whole project is plain Node.js, so the test suite doubles as your smoke test.
 
 ## Quick start
 
@@ -54,7 +40,7 @@ node agw.js web login        # panel one-time link (or `agw web login` after ins
 …or one-shot (Termux / Linux / macOS):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AndyerNotFound/ai-gateway-AI/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/AndyerNotFound/OpenAGW/main/install.sh | bash
 ```
 
 Smoke test:
@@ -64,6 +50,14 @@ curl http://127.0.0.1:16384/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"hello"}]}'
 ```
+
+## About OpenAGW
+
+OpenAGW is the unified successor of two earlier projects by the same maintainer: the codebase comes from **ai-gateway-AI** (the actively developed gateway), with the traffic-distribution features of **ai-gateway-core** merged back in. Architecture, direction and acceptance testing are the maintainer's; implementation was assisted by AI coding tools.
+
+What the merge adds, in user terms:
+
+- **Pin one exact channel.** When the same model name is served by several channels (or instances), `/v1/models` additionally exposes one composite id per source, `instance:channel:model`. Requesting a composite id pins that exact channel — verified first, so the named channel must really serve the model; routing, billing and logs still use the real model name. Plain names keep working unchanged and still round-robin across every serving channel. Instance / channel segments match tolerantly (case, spaces and hyphens are interchangeable). Covered by `node test/modelref_test.js`.
 
 ## Speak any dialect
 
@@ -105,7 +99,7 @@ Point existing apps at the gateway — no code changes; whatever the client spea
 - **Model → channel**: exact hit in `modelMap` → the `models` list → the `default` channel → the first channel. `modelMap` renames too: `{"gpt-4o": "gemini-2.5-flash"}` serves a Gemini model to a GPT client.
 - **Conversion covers streaming, tool calls, images, thinking content, and usage/token accounting.**
 - **SSE streams are never scrubbed.** Same-format bytes pass through intact (or are converted event-by-event); `dsmlClean` / channel `transcreet` applies to non-streaming JSON responses only. Privacy filtering remains a separate, optional feature. A failing channel (429 / 401 / 500–504 / connection error) transparently retries on the next one; genuine client errors (`400`) come back as-is. Once a stream has started, the current channel is locked in.
-- **Per-channel egress**: each channel can route through its own proxy (`"proxy": "clash"`), so Gemini/Claude can exit somewhere else than DeepSeek. `insecure: true` tolerates self-signed relays.
+- **Per-channel egress**: each channel can route through its own proxy (`"proxy": "clash"`), so Gemini / Claude can exit somewhere else than DeepSeek. `insecure: true` tolerates self-signed relays.
 
 ### Privacy filter
 
@@ -170,7 +164,7 @@ An optional channel-level `path` pins **all** requests on that channel to one ex
 ## Project layout
 
 ```text
-ai-gateway-AI/
+OpenAGW/
 ├── gateway.js        # entry: master (owns the sockets) + worker (serves traffic)
 ├── hot.js            # hot restart: worker swap + in-flight drain
 ├── server.js …       # routing, conversion, balancing, redaction — one focused module each
@@ -183,8 +177,31 @@ ai-gateway-AI/
 └── test/             # sandbox test suite
 ```
 
-Tests: `node test/balance_test.js` (77 balance-passthrough / routing assertions), `node test/redact_test.js` (40 redaction cases), `node test/panel_auth_test.js` (one-time link / session rotation / API auth), `node test/utf8_split_test.js` (chunk-split decoding), `node test/sse_stream_test.js` (one-byte SSE fragments, CRLF/CR, EOF without newline, DSML pass-through, whitespace-only deltas), `node test/sse_convert_test.js` (cross-format SSE + response redaction across fragments), `node test/dsml_nonstream_test.js` (non-stream DSML scrubbing/backfill), `node test/path_lock_test.js` (channel `path` lock + fixed passthrough), `node test/hot_restart_test.js` (worker swap with an in-flight SSE stream) and `node test/hot_pool_test.js` (same across instance ports) run anywhere; the full converter matrix (all 9 dialect pairs, streaming and not) and proxy/auth/failover E2E run in the maintainer's sandbox — 215/215.
+## Testing
+
+Every suite runs anywhere — no npm install, no build step:
+
+| Suite | Assertions | Covers |
+|---|---|---|
+| `test/balance_test.js` | 77 | balance passthrough + routing |
+| `test/redact_test.js` | 40 | redaction cases |
+| `test/sse_stream_test.js` | 40 | one-byte SSE fragments, CRLF/CR, EOF, DSML pass-through, whitespace-only deltas |
+| `test/panel_auth_test.js` | 31 | one-time link, session rotation, API auth |
+| `test/no_multiuser_test.js` | 20 | single-tenant behavior (accounts removed, card keys kept) |
+| `test/modelref_test.js` | 19 | composite `instance:channel:model` routing |
+| `test/path_lock_test.js` | 16 | channel `path` lock + fixed passthrough |
+| `test/sse_convert_test.js` | 16 | cross-format SSE + response redaction across fragments |
+| `test/hot_restart_test.js` | 9 | worker swap with an in-flight SSE stream |
+| `test/stats_all_test.js` | 8 | aggregate instance / model / channel stats |
+| `test/hot_pool_test.js` | 7 | hot restart across instance ports |
+| `test/dsml_nonstream_test.js` | 7 | non-stream DSML scrubbing / backfill |
+| `test/tls_single_entry_test.js` | 7 | TLS single entry — never a plaintext twin |
+| `test/session_persist_test.js` | 6 | panel session persistence |
+| `test/tls_fail_closed_test.js` | 4 | TLS fails closed on broken certs |
+| `test/utf8_split_test.js` | 4 | chunk-split decoding |
+
+**311 assertions, 0 failures** — measured on Node `v24.18.0` (Termux). The full converter matrix (all 9 dialect pairs, streaming and not) and proxy / auth / failover E2E run in the maintainer's sandbox — 215/215.
 
 ## License
 
-[AGPL-3.0](LICENSE)
+[AGPL-3.0](LICENSE). Network-service use also requires offering the source to users.
