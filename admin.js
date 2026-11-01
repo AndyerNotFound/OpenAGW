@@ -748,8 +748,13 @@ const BALL = (() => {
 })();
 
 async function handleAdmin(cfg, req, res, u, p, bodyStr) {
-// /admin page (built-in HTML)
+// /admin page (built-in HTML) -- requires auth like everything else under /admin
   if (req.method === 'GET' && (p === '/admin' || p === '/admin/')) {
+    if (!checkAdminAuth(cfg, req, u.searchParams)) {
+      return textRes(res, 401, '<!doctype html><meta charset="utf-8"><title>401</title>'
+        + '<body style="font-family:sans-serif;background:#1c1b1f;color:#e6e1e5;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">'
+        + '<div>\u26a0\ufe0f \u9700\u8981\u767b\u5f55: \u8bf7\u5728\u670d\u52a1\u5668\u6267\u884c <code>agw web login</code> \u83b7\u53d6\u4e00\u6b21\u6027\u767b\u5f55\u94fe\u63a5</div></body>', 'text/html; charset=utf-8');
+    }
     return textRes(res, 200, adminHTML(cfg), 'text/html; charset=utf-8');
   }
 
@@ -809,13 +814,17 @@ async function handleAdmin(cfg, req, res, u, p, bodyStr) {
     return res.end(fs.readFileSync(f, 'utf8'));
   }
 // /auth/<static> -- vendor JS / fonts etc. (nothing sensitive, no token check, browser-cache friendly)
-// Safety: must stay inside the m3 directory (no .. traversal) and must be a file
+// Safety: (1) must stay inside the m3 directory (no .. traversal) and must be a file;
+//         (2) extension whitelist -- only static asset types are served, never arbitrary files
+//             that might later land in m3/ (config backups, notes, keys).
   if (req.method === 'GET' && p.startsWith('/auth/')) {
     let rel;
     try { rel = decodeURIComponent(p.slice('/auth/'.length)); } catch (e) { rel = ''; }
     const root = path.join(CORE, 'm3');
     const f = path.join(root, rel);
+    const extWl = ['.js', '.mjs', '.css', '.json', '.map', '.woff2', '.woff', '.ttf', '.svg', '.png', '.webp', '.html', '.ico', '.txt'];
     if (rel && !rel.includes('\0') && f.startsWith(root + path.sep)
+        && extWl.includes(path.extname(rel).toLowerCase())
         && fs.existsSync(f) && fs.statSync(f).isFile()) {
       const ext = path.extname(f).toLowerCase();
       const isApp = rel === 'app.js' || rel === 'app.css'; // 面板本体: 不缓存, 改完刷新即生效
@@ -850,7 +859,7 @@ async function handleAdmin(cfg, req, res, u, p, bodyStr) {
   if (!p.startsWith('/admin/api/')) return null; // 不是管理路由, 交给后续
 
   if (!checkAdminAuth(cfg, req, u.searchParams)) {
-    return jsonRes(res, 401, { error: '认证失败：App 请使用 default 实例的 config.webToken（不是 agw web login 的一次性链接）' });
+    return jsonRes(res, 401, { error: '认证失败' });
   }
 
   const api = p.slice('/admin/api/'.length);
