@@ -13,7 +13,6 @@ agw router <instance-name>
      --cold <num:s>
      --filter <on/off>
      --models-fetch <num:h> [<0=off>]
-     --transcreet <on/off/res-only>   # 仅非流式响应
 agw chan <instance-name>
      --sdk <openai/gemini/claude>
      --provider <channel-name> <"url=BaseURL, key=APIKey">
@@ -73,7 +72,6 @@ agw chan <inst-name>
        balance=<URL>
        balance-key=<JSON-Key>
        delay=<num:ms>
-       transcreet=<on/off/res-only>
     default <channel-name>
     lock <channel-name> (立刻锁定)
        --time -t <num:s/time> (锁定到何时)

@@ -67,7 +67,10 @@ const ok = (c, m) => { if (c) pass++; else { fail++; console.error('  ✗ ' + m)
   ok(sawBody && !sawBody.toString('utf8').includes('\uFFFD'), '劈包请求体经网关后上游收到完整 UTF-8(无 U+FFFD)');
   ok(sawBody && sawBody.toString('utf8') === payload, '上游收到的请求体与客户端发出的一致');
   ok(!resp.includes('\uFFFD'), '网关响应(上游回包同样劈包)无 U+FFFD');
-  ok(resp.includes(payload + '\n{"ok":true}'), '网关响应内容完整');
+  // the gateway relays the upstream body as HTTP/1.1; framing may be chunked, so compare after
+  // stripping headers and chunk frames — the point is byte integrity, not single-chunk delivery
+  const bodyOnly = resp.replace(/^[\s\S]*?\r\n\r\n/, '').replace(/\r\n[0-9a-fA-F]+\r\n/g, '').replace(/\r\n0\r\n\r\n$/, '');
+  ok(bodyOnly.includes(payload + '\n{"ok":true}'), '网关响应内容完整');
 
   await new Promise(r => started.server.close(r));
   upstream.srv.close();

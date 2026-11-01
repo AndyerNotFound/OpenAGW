@@ -88,9 +88,6 @@ cfg.adminExpireAt = Number(cfg.adminExpireAt) > 0 ? Number(cfg.adminExpireAt) : 
 // Same-channel retry count for connection-level errors (socket hang up etc.), default 2; 0 = off
   if (cfg.connRetry === undefined) cfg.connRetry = 2;
   cfg.cors = cfg.cors !== false;
-// Built-in DSML tool-call markup scrubbing for non-streaming JSON (on by default; dsmlClean:false disables; dsmlClean.reasoning:false scrubs content only, not thinking)
-  const __dc = (cfg.dsmlClean && typeof cfg.dsmlClean === 'object') ? cfg.dsmlClean : {};
-  cfg.dsmlClean = { enable: cfg.dsmlClean === false ? false : __dc.enable !== false, reasoning: __dc.reasoning !== false, backfill: __dc.backfill !== false };
 // TLS config parsing
   cfg.tls = cfg.tls || (cfg.listen && cfg.listen.tls) || {};
   if (cfg.tls.enable) {
@@ -161,10 +158,9 @@ redactCache.reset(); // the config may have changed extra regexes; the privacy-f
       modelMap: (ch.modelMap && typeof ch.modelMap === 'object' && !Array.isArray(ch.modelMap)) ? ch.modelMap : null,
       default: !!ch.default,
       delayMs: Math.max(0, Number(ch.delayMs) || 0),
-      // channel locking (loop: chan lock/unlock) and DSML scrub override (loop: chan edit transcreet)
+      // channel locking (loop: chan lock/unlock)
 lockAt: Number(ch.lockAt) > 0 ? Number(ch.lockAt) : null,   // when the lock starts (ms epoch)
 lockUntil: Number(ch.lockUntil) > 0 ? Number(ch.lockUntil) : null, // when it auto-unlocks (ms epoch; empty = manual unlock)
-      transcreet: ['on', 'off', 'res-only'].includes(String(ch.transcreet || '').toLowerCase()) ? String(ch.transcreet).toLowerCase() : null,
       useResponses: ch.useResponses === undefined ? undefined : !!ch.useResponses,
       probe: !!ch.probe,
       addUsage: ch.addUsage !== false,

@@ -227,7 +227,7 @@ function cmdInst(argv) {
   agw inst <name> --cold <sec>      上游连接超时秒数
   agw inst <name> --filter <on/off> 隐私过滤(密钥/敏感信息打码)
   agw inst <name> --filter-resp <on/off>  响应方向也打码
-  agw inst <name> --transcreet <on/off/res-only>  非流式 DSML 清洗范围`));
+`));
     return;
   }
   if (a === 'list') return listInsts().forEach(n => {
@@ -285,12 +285,6 @@ function cmdInst(argv) {
     c.redact = c.redact || {}; c.redact.response = !/^off$/i.test(v || 'on');
     saveCfg(name, c); ok(`Response filter ${onoff(c.redact.response)}`);
   });
-  if (has('--transcreet')) touch.push(() => {
-    const c = loadCfg(name); const v = (get('--transcreet') || 'on').toLowerCase();
-    c.dsmlClean = { enable: v !== 'off', reasoning: v === 'on' };
-    saveCfg(name, c);
-    ok(`DSML cleaning ${v === 'on' ? 'on (with chain-of-thought)' : v === 'res-only' ? 'res-only (response only)' : 'off'}`);
-  });
   const showStatus = async () => {
     const kind = (get('--status') || 'all').toLowerCase();
     const N = 50;
@@ -339,7 +333,7 @@ function cmdInst(argv) {
   };
   if (onlyStatus) return showStatus();
   if (has('--status')) return Promise.all(touch.map(t => t())).then(showStatus); // --status 原先只被 onlyStatus 分支使用, 显式传参时无输出
-  const valFlags = ['--apikey', '--webtoken', '--adminkey', '--tls', '--cold', '--filter', '--filter-resp', '--transcreet', '--status'];
+  const valFlags = ['--apikey', '--webtoken', '--adminkey', '--tls', '--cold', '--filter', '--filter-resp', '--status'];
   const act = flags.find((f, i) => !f.startsWith('--') && !valFlags.includes(flags[i - 1]));
   if (act === 'start' || act === 'stop') {
     return api('POST', `/admin/api/action/${name}/${act}`).then(d => ok(`${name} ${act}${d && d.restarting ? '' : ''}`)).catch(e => die(e.message + ' (单进程池模式下或需 agw.sh restart)'));
@@ -362,7 +356,7 @@ function cmdRouter(argv) {
   agw router <inst> --models-fetch <h>       模型自动同步间隔(0=关)
   agw router <inst> --filter <on/off>        隐私过滤 redact.enable
   agw router <inst> --filter-resp <on/off>   响应方向打码 redact.response
-  agw router <inst> --transcreet <on/off/res-only>  非流式 DSML 清洗(dsmlClean)`));
+`));
     return;
   }
   const c = loadCfg(name);
@@ -378,10 +372,6 @@ function cmdRouter(argv) {
   });
   if (get('--filter') != null) touch.push(() => { c.redact = c.redact || {}; c.redact.enable = !/^off$/i.test(get('--filter')); });
   if (get('--filter-resp') != null) touch.push(() => { c.redact = c.redact || {}; c.redact.response = !/^off$/i.test(get('--filter-resp')); });
-  if (get('--transcreet') != null) touch.push(() => {
-    const v = get('--transcreet').toLowerCase();
-    c.dsmlClean = { enable: v !== 'off', reasoning: v === 'on' };
-  });
   if (!touch.length) return showRouter(c);
   touch.forEach(f => f());
   saveCfg(name, c);
@@ -390,7 +380,7 @@ function cmdRouter(argv) {
 }
 function showRouter(c) {
   console.log(`  connRetry=${c.connRetry ?? 2}  responseTimeout=${msStr(c.responseTimeout || 180000)}  connectTimeout=${msStr(c.connectTimeout || 15000)}
-  modelSync=${(c.modelSync && c.modelSync.enable !== false) ? (c.modelSync.intervalHours || 24) + 'h' : C.dim('off')}  redact=${onoff(c.redact && c.redact.enable)}${(c.redact && c.redact.response) ? '+resp' : ''}  dsml(non-stream)=${(c.dsmlClean && c.dsmlClean.enable) ? ((c.dsmlClean.reasoning ? 'on' : 'res-only')) : 'off'}`);
+  modelSync=${(c.modelSync && c.modelSync.enable !== false) ? (c.modelSync.intervalHours || 24) + 'h' : C.dim('off')}  redact=${onoff(c.redact && c.redact.enable)}${(c.redact && c.redact.response) ? '+resp' : ''}`);
 }
 
 /* ================================================================
@@ -421,7 +411,7 @@ function cmdChan(argv) {
     for (const ch of c.channels) {
       const lk = chanLockInfo(ch);
       console.log(`  ${C.cyn(pad(ch.name, 18))} ${pad(ch.type || 'openai', 8)} ${trunc(ch.baseUrl, 46)}${ch.default ? C.grn(' [default]') : ''}${lk.locked ? C.red(' [locked]') + C.dim(' until ' + fmtWhen(lk.until || 0)) : lk.scheduled ? C.yel(' [lock at ' + fmtWhen(lk.at) + ']') : ''}
-      models:${(ch.models || []).length || '-'} map:${Object.keys(ch.modelMap || {}).length} proxy:${ch.proxy || '-'} delay:${ch.delayMs || 0}ms path:${ch.path || 'auto'} dsml:${ch.transcreet || 'inherit'} bal:${ch.balanceUrl ? 'custom' : ''}${ch.balanceWarn ? C.yel(' warn<' + ch.balanceWarn + '>') : ''}`);
+      models:${(ch.models || []).length || '-'} map:${Object.keys(ch.modelMap || {}).length} proxy:${ch.proxy || '-'} delay:${ch.delayMs || 0}ms path:${ch.path || 'auto'} bal:${ch.balanceUrl ? 'custom' : ''}${ch.balanceWarn ? C.yel(' warn<' + ch.balanceWarn + '>') : ''}`);
     }
     return;
   }
@@ -1338,7 +1328,6 @@ const HELP_CHAN = t(`渠道管理 loop 命令:
   edit <渠道>                   进入编辑 loop
        name=<渠道名>  url=<BaseURL>  sdk=<0=openai/1=claude/2=google>
        key=<API-Key>  path=<上游固定路径|none>  balance=<URL>  balance-key=<JSON-Key>
-       delay=<毫秒/2s>  transcreet=<on/off/res-only/inherit>
   default <渠道>                设为默认渠道(其余默认自动取消)
   lock <渠道> [-t 时长/时间] [-w 时长/时间] [--cancel]   锁定(路由跳过)
   unlock <渠道> [-t 时长/时间] [-w 时长/时间] [--cancel] 解锁/定时解锁
@@ -1400,12 +1389,12 @@ const pv = (a, rest) => { // <channel> + rest -> cmdChan --provider
     const lk = chanLockInfo(ch);
     console.log(C.bold('■ 编辑渠道 ' + ch.name) + C.dim('  (key=value 逐项生效, exit 返回)'));
     console.log(`  name=${ch.name}  url=${ch.baseUrl}  path=${ch.path || 'auto'}  sdk=${ch.type}`);
-    console.log(`  key=${ch.apiKey ? maskKey(ch.apiKey) : C.dim('(empty)')}  default=${ch.default ? 'on' : 'off'}  delay=${ch.delayMs || 0}ms  transcreet=${ch.transcreet || 'inherit'}`);
+    console.log(`  key=${ch.apiKey ? maskKey(ch.apiKey) : C.dim('(empty)')}  default=${ch.default ? 'on' : 'off'}  delay=${ch.delayMs || 0}ms`);
     console.log(`  balance=${ch.balanceUrl || '-'}  balance-key=${ch.balancePath || '-'}` + (lk.locked ? C.red('  [已锁定]') : lk.scheduled ? C.yel('  [待锁定 ' + fmtWhen(lk.at) + ']') : ''));
   };
   const applyEdit = line => {
     const eq = line.indexOf('=');
-    if (eq < 0) return console.log(C.yel('格式: key=value (name/url/path/sdk/key/balance/balance-key/delay/transcreet)'));
+    if (eq < 0) return console.log(C.yel('格式: key=value (name/url/path/sdk/key/balance/balance-key/delay)'));
     const k = line.slice(0, eq).trim().toLowerCase(), v = line.slice(eq + 1).trim();
     const ch = chOf(mode.name);
     if (!ch) { mode = null; return console.log(C.yel('渠道已不存在, 退出编辑')); }
@@ -1436,11 +1425,6 @@ const pv = (a, rest) => { // <channel> + rest -> cmdChan --provider
       const ms = /^\d+(\.\d+)?$/.test(v) ? Number(v) : /^\d+(\.\d+)?s$/i.test(v) ? Number(v.slice(0, -1)) * 1000 : /^\d+(\.\d+)?ms$/i.test(v) ? Number(v.slice(0, -2)) : NaN;
       if (!(ms >= 0)) return console.log(C.yel('delay 需要毫秒数: delay=200 / delay=2s'));
       next.delayMs = Math.min(120000, Math.round(ms));
-    }
-    else if (k === 'transcreet') {
-      const x = v.toLowerCase();
-      if (!['on', 'off', 'res-only', 'inherit', 'none'].includes(x)) return console.log(C.yel('transcreet: on / off / res-only / inherit'));
-      next.transcreet = (x === 'inherit' || x === 'none') ? '' : x;
     }
     else return console.log(C.yel('未知字段: ' + k));
     return post(next).then(() => { ok(k + ' applied'); editView(); }).catch(e => console.log(C.yel('保存失败: ' + e.message)));
@@ -1787,13 +1771,12 @@ function help(sub) {
   agw inst delete <inst> [-y]                   删除实例(default 不可删)
   agw inst <inst> --status <all|requests|error|debug>
   agw inst <inst> --apikey <key> --webtoken <key> --tls <port|0=关>
-  agw inst <inst> --cold <秒> --filter <on|off> --transcreet <on|off|res-only>
+  agw inst <inst> --cold <秒> --filter <on|off>
 
 路由
   agw router <inst>                             查看当前路由配置
   agw router <inst> --retry <n> --timeout <秒> --cold <秒>
   agw router <inst> --models-fetch <小时|0=关> --filter <on|off>
-  agw router <inst> --transcreet <on|off|res-only>
 
 渠道
   agw chan <inst>                               列出渠道

@@ -98,7 +98,6 @@ async function startGateway(upPort, extra) {
   const cfgObj = Object.assign({
     listen: { host: '127.0.0.1', port: 0 },
     gatewayKey: '', webToken: '', panel: { openBrowser: false }, modelSync: { enable: false }, probe: { enable: false },
-    dsmlClean: { enable: true, reasoning: true, backfill: false },
     channels: [{ name: 'up', type: 'openai', baseUrl: 'http://127.0.0.1:' + upPort, apiKey: 'x', models: ['m'], default: true }],
   }, extra || {});
   fs.writeFileSync(cfgFile, JSON.stringify(cfgObj));
@@ -134,7 +133,7 @@ async function startGateway(upPort, extra) {
     model: 'm', max_tokens: 64, stream: true, messages: [{ role: 'user', content: 'hi' }],
   });
   const c1c = parseClaudeText(r1c.raw);
-  eq(c1c.text, '前' + markup + '后', 'Claude 转换: 流式 DSML 不再清洗, 标记原样到达');
+  eq(c1c.text, '前' + markup + '后', 'Claude 转换: 文本标记原样到达');
 
   const up2 = await rawUpstream([
     sse(delta('前段 sk-abc')) + sse(delta('defghijklmnopqrstuvwx')) + sse(delta(' 后段')) + 'data: ' + JSON.stringify(finish()) + '\ndata: [DONE]',

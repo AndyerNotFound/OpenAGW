@@ -9,7 +9,7 @@ const crypto = require('crypto');
 const os = require('os');
 const zlib = require('zlib');
 const { logErr, rpCompile, log, hdrName, utf8, safeParse, rpWalk, randId } = require('./util');
-const { dsmlDiag, makeDirectPipe, dsmlExtractCall, dsmlCleanText, dsmlPickCall } = require('./dsml');
+const { makeDirectPipe } = require('./pipe');
 const { ResponsesStreamParser, UpstreamStreamParser, SSEDecoder, responsesRespToCanonical, makeResponsesWriter, makeWriter, canonicalToResponsesResp, canonicalToOpenAIResp, canonicalToClaudeResp, canonicalToGeminiResp, responsesToCanonical } = require('./convert');
 const { UP_RESP, TO_CANON, buildRequestForChannel, SAME_RETRYABLE, BUILD_BODY } = require('./sync');
 const { tokOf, sendError, corsHeaders, pickChannels, globMatch, forcedChannelName, analyzePrompt, calibRatio, calibUpdate, scaleDist } = require('./router');
@@ -63,29 +63,8 @@ function handleUpstreamResponse(cfg, ch, clientFormat, clientApi, canonical, bod
   const { direct, stream, upApi } = built;
   const { logMeta, t0, usageCapture, stats } = ctx;
   const rpInc = (cfg.replace && Array.isArray(cfg.replace.inc)) ? rpCompile(cfg.replace.inc) : [];
-  // channel-level override (ch.transcreet): on / off / res-only; unset = follow the instance's global dsmlClean
-  const chTrans = ch && ch.transcreet ? String(ch.transcreet).toLowerCase() : '';
-  const dsmlOn = chTrans === 'off' ? false : (chTrans ? true : !!(cfg.dsmlClean && cfg.dsmlClean.enable));        // 内置 DSML 标记清洗(默认开)
-  const dsmlThink = chTrans === 'on' ? true : (chTrans === 'off' || chTrans === 'res-only') ? false : !!(cfg.dsmlClean && cfg.dsmlClean.reasoning); // 思考字段是否也清
-/* SSE streams are never cleaned: no DSML scrubbing, no per-event rewriting.  The stream
-   *   is forwarded byte-for-byte (same format) or converted event-by-event.  DSML cleaning
-   *   remains available for non-streaming JSON only, where the whole body is already in hand. */
-/* Backfill gate: restore a textual call into a structured one only when the function name matches a tool the client declared this round */
-  const dsmlBackfill = !!(cfg.dsmlClean && cfg.dsmlClean.backfill);
-  const dsmlToolNames = (() => {
-    if (!dsmlBackfill) return null;
-    const arr = (canonical && Array.isArray(canonical.tools)) ? canonical.tools : [];
-    const set = new Set();
-    for (const t of arr) { const n = t && t.function && t.function.name; if (n) set.add(String(n)); }
-    return set.size ? set : null;
-  })();
-  const dsmlOpts = {
-    toolNames: dsmlToolNames,
-    onDiag: (rec) => dsmlDiag(cfg, Object.assign({ ch: ch.name, model: canonical && canonical.model, fmt: clientFormat, stream: !!stream, direct: !!direct }, rec)),
-  };
   const ctSse = /event-stream/i.test(String(upRes.headers['content-type'] || ''));
-  const dsmlPipe = dsmlOn && !stream;   // stream-process cleaning removed: never rewrite SSE
-  const rewritePipe = !!(rpInc.length || dsmlPipe || (stream && ctSse));   // SSE forwarding still uses the event pipe (no cleaning)
+  const rewritePipe = !!(rpInc.length || (stream && ctSse));   // SSE forwarding still uses the event pipe (no cleaning)
   const isResponsesUp = ch.type === 'openai' && upApi === 'responses';
 
 /* **Unified settlement + finalization hardening (2026-09-18, same origin as ai-gateway-core)
@@ -179,7 +158,7 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
           usageCapture.reasoning = parser.usage ? (parser.usage.reasoning || 0) : 0;
           __settle(upRes.statusCode);
         } catch (e) { logErr('[stream] 结算失败，仍强制给下游收尾:', e.message); }
-/* *When a rewrite pipe exists (inc replacement / DSML scrubbing), finalization belongs to the pipe -- it must flush the trailing partial line and the state machine residue first;
+/* *When a rewrite pipe exists (inc replacement / SSE forwarding), finalization belongs to the pipe -- it must flush the trailing partial line first;
          *   calling res.end() here turns later pipe writes into write-after-end (trailing bytes were lost, observed 2026-10-15). */
         if (!rewritePipe) { try { res.end(); } catch (_) {} }
       });
@@ -205,14 +184,12 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
       });
       upRes.on('error', (e) => { try { res.end(); } catch (_) {} __settle(502, '上游中断(非流式): ' + e.message); });
     }
-/* SSE streams keep the event-level forwarding pipe (framing, tolerant decode, [DONE]);
-     * DSML scrubbing is non-stream only, so dsmlPipe is false here for streams. */
+/* SSE streams keep the event-level forwarding pipe (framing, tolerant decode, [DONE]). */
     if (rewritePipe) {
-/* Unified rewrite pipe (2026-10-15): inc text replacement + built-in DSML markup scrubbing
+/* Unified rewrite pipe (2026-10-15): inc text replacement; SSE events pass through byte-for-byte
        *   - rewrites line by line; lines that need no rewrite pass through verbatim (same-format passthrough stays as lossless as possible);
-       *   - the DSML state machine is isolated per field, touching only content/text and reasoning_content/reasoning/thinking;
-       *   - finalization (trailing partial line + state-machine residue) and res.end() both live inside the pipe; see makeDirectPipe. */
-      const pipe = makeDirectPipe(res, rpInc, dsmlPipe, dsmlThink, stream, Object.assign({}, dsmlOpts, { isSSE: ctSse, appendDone: clientFormat === 'openai' }));
+       *   - finalization (trailing partial line) and res.end() both live inside the pipe; see makeDirectPipe. */
+      const pipe = makeDirectPipe(res, rpInc, stream, { isSSE: ctSse, appendDone: clientFormat === 'openai' });
       let upEnded = false;
       const finishPipe = () => { if (upEnded) return; upEnded = true; try { pipe.end(); } catch (_) {} };
       __forceEnd = () => finishPipe();
@@ -325,24 +302,7 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
       const cresp = isResponsesUp ? responsesRespToCanonical(j) : UP_RESP[ch.type](j);
       usageCapture.input = cresp.usage.input;
       usageCapture.output = cresp.usage.output;
-if (dsmlOn) {   /* non-streaming: scrub the whole text at once (final=true: unclosed markup dropped, deferred tail appended) + textual-call backfill */
-        try {
-          if (typeof cresp.text === 'string') {
-            const cand = dsmlExtractCall(cresp.text);
-            cresp.text = dsmlCleanText(cresp.text);
-            const hasStructured = Array.isArray(cresp.tool_calls) && cresp.tool_calls.length;
-            const pick = (!hasStructured && cand) ? dsmlPickCall(cand, dsmlToolNames) : null;
-            if (pick) {
-              cresp.tool_calls = [{ id: randId('call_dsml_'), type: 'function', function: { name: pick.name, arguments: pick.arguments } }];
-              if (!cresp.finish_reason || cresp.finish_reason === 'stop') cresp.finish_reason = 'tool_calls';
-              dsmlDiag(cfg, { ch: ch.name, model: canonical && canonical.model, fmt: clientFormat, stream: false, direct: false, content: 1, emptied: cand ? 1 : 0, blocks: cand ? cand.length : 0, names: (cand || []).map(c => c.name), backfill: 'no-structured-call→tool_calls', finishIn: 'stop', finishOut: cresp.finish_reason });
-            } else if (cand && hasStructured) {
-              dsmlDiag(cfg, { ch: ch.name, model: canonical && canonical.model, fmt: clientFormat, stream: false, direct: false, blocks: cand.length, names: cand.map(c => c.name), backfill: 'already-has-structured-call' });
-            }
-          }
-          if (dsmlThink && typeof cresp.reasoning === 'string') cresp.reasoning = dsmlCleanText(cresp.reasoning);
-        } catch (e) { logErr('[dsml] 非流式清洗失败:', e.message); }
-      }
+
 if (respRedactOn(cfg, urlInfo)) {   // response-direction filter (non-streaming): content/thinking/tool args
         try {
           const rx = cfg.redact && cfg.redact.extra;

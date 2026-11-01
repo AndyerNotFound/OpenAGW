@@ -21,7 +21,7 @@ Gemini ──┘    convert ⇄ redact       └──▶  Claude official
 
 ## Proven, not promised
 
-- **16 test suites · 311 assertions — all green.** Every suite is standalone: `node test/<name>_test.js`, no install, no build step.
+- **15 test suites · 303 assertions — all green.** Every suite is standalone: `node test/<name>_test.js`, no install, no build step.
 - The full converter matrix (all 9 dialect pairs, streaming and not) plus proxy / auth / failover E2E pass in the maintainer's sandbox — **215/215**.
 - Nothing to download for the gateway itself — the whole project is plain Node.js, so the test suite doubles as your smoke test.
 
@@ -98,7 +98,7 @@ Point existing apps at the gateway — no code changes; whatever the client spea
 
 - **Model → channel**: exact hit in `modelMap` → the `models` list → the `default` channel → the first channel. `modelMap` renames too: `{"gpt-4o": "gemini-2.5-flash"}` serves a Gemini model to a GPT client.
 - **Conversion covers streaming, tool calls, images, thinking content, and usage/token accounting.**
-- **SSE streams are never scrubbed.** Same-format bytes pass through intact (or are converted event-by-event); `dsmlClean` / channel `transcreet` applies to non-streaming JSON responses only. Privacy filtering remains a separate, optional feature. A failing channel (429 / 401 / 500–504 / connection error) transparently retries on the next one; genuine client errors (`400`) come back as-is. Once a stream has started, the current channel is locked in.
+- **Same-format responses pass through byte-for-byte** (or are converted event-by-event); privacy filtering remains a separate, optional feature. A failing channel (429 / 401 / 500–504 / connection error) transparently retries on the next one; genuine client errors (`400`) come back as-is. Once a stream has started, the current channel is locked in.
 - **Per-channel egress**: each channel can route through its own proxy (`"proxy": "clash"`), so Gemini / Claude can exit somewhere else than DeepSeek. `insecure: true` tolerates self-signed relays.
 
 ### Privacy filter
@@ -185,7 +185,7 @@ Every suite runs anywhere — no npm install, no build step:
 |---|---|---|
 | `test/balance_test.js` | 77 | balance passthrough + routing |
 | `test/redact_test.js` | 40 | redaction cases |
-| `test/sse_stream_test.js` | 40 | one-byte SSE fragments, CRLF/CR, EOF, DSML pass-through, whitespace-only deltas |
+| `test/sse_stream_test.js` | 39 | one-byte SSE fragments, CRLF/CR, EOF, whitespace-only deltas |
 | `test/panel_auth_test.js` | 31 | one-time link, session rotation, API auth |
 | `test/no_multiuser_test.js` | 20 | single-tenant behavior (accounts removed, card keys kept) |
 | `test/modelref_test.js` | 19 | composite `instance:channel:model` routing |
@@ -194,13 +194,12 @@ Every suite runs anywhere — no npm install, no build step:
 | `test/hot_restart_test.js` | 9 | worker swap with an in-flight SSE stream |
 | `test/stats_all_test.js` | 8 | aggregate instance / model / channel stats |
 | `test/hot_pool_test.js` | 7 | hot restart across instance ports |
-| `test/dsml_nonstream_test.js` | 7 | non-stream DSML scrubbing / backfill |
 | `test/tls_single_entry_test.js` | 7 | TLS single entry — never a plaintext twin |
 | `test/session_persist_test.js` | 6 | panel session persistence |
 | `test/tls_fail_closed_test.js` | 4 | TLS fails closed on broken certs |
 | `test/utf8_split_test.js` | 4 | chunk-split decoding |
 
-**311 assertions, 0 failures** — measured on Node `v24.18.0` (Termux). The full converter matrix (all 9 dialect pairs, streaming and not) and proxy / auth / failover E2E run in the maintainer's sandbox — 215/215.
+**303 assertions, 0 failures** — measured on Node `v24.18.0` (Termux). The full converter matrix (all 9 dialect pairs, streaming and not) and proxy / auth / failover E2E run in the maintainer's sandbox — 215/215.
 
 ## License
 

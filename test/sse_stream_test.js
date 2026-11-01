@@ -3,7 +3,7 @@
  * Pathological upstreams: one byte per TCP write, CRLF / bare CR line endings,
  * a final event without a trailing newline, `data:` without a space, heartbeats,
  * back-to-back events without a blank line, and invalid JSON payloads.
- * Streaming no longer cleans DSML: every byte of content (including markup) must survive. */
+ * Every byte of content (including markup) must survive byte-for-byte. */
 const net = require('net');
 const http = require('http');
 const fs = require('fs');
@@ -11,7 +11,7 @@ const os = require('os');
 const path = require('path');
 const G = require('../gateway.js');
 const { SSEParser, SSEDecoder } = require('../sse.js');
-const { makeDirectPipe } = require('../dsml.js');
+const { makeDirectPipe } = require('../pipe.js');
 
 let pass = 0, fail = 0;
 function ok(cond, msg) { if (cond) pass++; else { fail++; console.error('  ✗ ' + msg); } }
@@ -47,7 +47,7 @@ function unitTests() {
 
   const out = [];
   const fake = { write: s => { out.push(s); return true; }, end: () => {} };
-  const pipe = makeDirectPipe(fake, [], false, false, true, { isSSE: true, appendDone: false });
+  const pipe = makeDirectPipe(fake, [], true, { isSSE: true, appendDone: false });
   pipe.push('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"甲"}}\n\n');
   pipe.end();
   ok(!out.join('').includes('[DONE]'), '非 OpenAI 客户端不追加 [DONE]');
@@ -55,7 +55,7 @@ function unitTests() {
   const pipeText = (content) => {
     const chunks = [];
     const fr = { write: s => { chunks.push(s); return true; }, end: () => {} };
-    const pp = makeDirectPipe(fr, [], false, false, true, { isSSE: true, appendDone: true });
+    const pp = makeDirectPipe(fr, [], true, { isSSE: true, appendDone: true });
     pp.push('data: ' + JSON.stringify({ choices: [{ index: 0, delta: { content }, finish_reason: null }] }) + '\n\n');
     pp.push('data: ' + JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }) + '\n\n');
     pp.end();
@@ -71,29 +71,20 @@ function unitTests() {
   };
   eq(pipeText('1 < 2 | 3'), '1 < 2 | 3', 'SSE 流: 普通比较符原样转发');
   eq(pipeText('if n < 16 the parameter is ignored'), 'if n < 16 the parameter is ignored', 'SSE 流: 普通文本不被清洗');
-  eq(pipeText('a<｜DSML｜invoke name="x">b'), 'a<｜DSML｜invoke name="x">b', 'SSE 流: DSML 标记不再清洗, 原样转发');
+  eq(pipeText('a<｜DSML｜invoke name="x">b'), 'a<｜DSML｜invoke name="x">b', 'SSE 流: 文本标记原样转发');
   eq(pipeText('前缀<invoke name="x"> 正文 <b>粗</b> 后续'), '前缀<invoke name="x"> 正文 <b>粗</b> 后续', 'SSE 流: 标记与普通标签原样转发');
   eq(pipeText('x <invoke> y z </invoke> w'), 'x <invoke> y z </invoke> w', 'SSE 流: 完整标记原样转发');
   eq(pipeText('a</invoke> b'), 'a</invoke> b', 'SSE 流: 结束标记原样转发');
 
-  {
-    const out = [];
-    const fake = { write: s => { out.push(s); return true; }, end: () => {} };
-    const pp = makeDirectPipe(fake, [], true, true, true, { isSSE: true, appendDone: true });
-    const markup = '<｜DSML｜tool_calls><｜DSML｜invoke name="x"><｜DSML｜parameter name="q">1</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>';
-    pp.push('data: ' + JSON.stringify({ choices: [{ index: 0, delta: { content: markup }, finish_reason: null }] }) + '\n\n');
-    pp.end();
-    ok(out.join('').includes('DSML'), '流式安全阀: 即使调用方误传 dsmlOn=true 也不清洗');
-  }
 
   const g1 = [];
   const fg1 = { write: s => { g1.push(s); return true; }, end: () => {} };
-  const pg1 = makeDirectPipe(fg1, [], false, false, true, { isSSE: false, appendDone: true });
+  const pg1 = makeDirectPipe(fg1, [], true, { isSSE: false, appendDone: true });
   pg1.push('data: {"a":1}\n\n'); pg1.end();
   eq((g1.join('').match(/\[DONE\]/g) || []).length, 1, '误标 Content-Type 的流: 补一个 [DONE]');
   const g2 = [];
   const fg2 = { write: s => { g2.push(s); return true; }, end: () => {} };
-  const pg2 = makeDirectPipe(fg2, [], false, false, true, { isSSE: false, appendDone: true });
+  const pg2 = makeDirectPipe(fg2, [], true, { isSSE: false, appendDone: true });
   pg2.push('data: {"a":1}\n\ndata: [DONE]\n\n'); pg2.end();
   eq((g2.join('').match(/\[DONE\]/g) || []).length, 1, '误标 Content-Type 的流: 不重复 [DONE]');
 }
@@ -190,7 +181,6 @@ function requestStream(port, route, body) {
   fs.writeFileSync(cfgFile, JSON.stringify({
     listen: { host: '127.0.0.1', port: 0 },
     gatewayKey: '', webToken: '', panel: { openBrowser: false }, modelSync: { enable: false }, probe: { enable: false },
-    dsmlClean: { enable: true, reasoning: true, backfill: true },
     channels: [{ name: 'up', type: 'openai', baseUrl: 'http://127.0.0.1:' + up.port, apiKey: 'x', models: ['m'], default: true }],
   }));
   const cfg = G.loadConfig(cfgFile);
@@ -208,8 +198,8 @@ function requestStream(port, route, body) {
   eq(r2.text, 'A B\nC', '仅空白增量不被清洗丢弃');
 
   const r3 = await requestStream(port, 'dsml', base);
-  eq(r3.text, dsmlText + dsmlMarkup + ' ' + dsmlTail, 'SSE 流不再清洗 DSML: 正文与标记原样到达');
-  ok(r3.raw.includes('DSML'), 'SSE 流: DSML 标记按原样转发');
+  eq(r3.text, dsmlText + dsmlMarkup + ' ' + dsmlTail, 'SSE 流: 正文与标记原样到达');
+  ok(r3.raw.includes('DSML'), 'SSE 流: 文本标记按原样转发');
 
   const r4 = await requestStream(port, 'nospace', base);
   eq(r4.text, '无空格', 'data: 无空格 + event 字段 + 心跳');
@@ -238,7 +228,7 @@ function requestStream(port, route, body) {
     tools: [{ type: 'function', function: { name: 'get_weather', parameters: { type: 'object', properties: { city: { type: 'string' } } } } }],
   });
   const r10 = await requestStream(port, 'backfill', toolReq);
-  eq(r10.text, '准备调用<｜DSML｜invoke name="get_weather"><｜DSML｜parameter name="city">北京</｜DSML｜parameter></｜DSML｜invoke>', 'SSE 流: 文本调用标记不再回填/清洗');
+  eq(r10.text, '准备调用<｜DSML｜invoke name="get_weather"><｜DSML｜parameter name="city">北京</｜DSML｜parameter></｜DSML｜invoke>', 'SSE 流: 文本调用标记原样到达(不回填)');
   eq(r10.toolName, '', 'SSE 流: 不合成 tool_calls');
   eq(r10.toolArgs, '', 'SSE 流: 不合成工具参数');
   eq(r10.finishReason, null, 'SSE 流: 不伪造 finish_reason');
