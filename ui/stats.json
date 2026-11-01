@@ -1,0 +1,142 @@
+{
+ "gcui": 1,
+ "title": "统计",
+ "data": {
+  "stats": {},
+  "active": {}
+ },
+ "root": {
+  "type": "column",
+  "gap": 12,
+  "children": [
+   {
+    "type": "row",
+    "gap": 8,
+    "children": [
+     {
+      "type": "text",
+      "text": "{{state.inst}} · 统计",
+      "style": "title",
+      "weight": 1
+     },
+     {
+      "type": "button",
+      "text": "刷新",
+      "style": "tonal",
+      "action": {
+       "type": "reload"
+      }
+     }
+    ]
+   },
+   {
+    "type": "card",
+    "children": [
+     {
+      "type": "row",
+      "gap": 8,
+      "children": [
+       {
+        "type": "badge",
+        "text": "请求 {{state.stats.requests}}",
+        "tone": "info"
+       },
+       {
+        "type": "badge",
+        "text": "错误 {{state.stats.errors}}",
+        "tone": "danger",
+        "toneMap": {
+         "错误 0": "ok"
+        }
+       },
+       {
+        "type": "badge",
+        "text": "重试 {{state.stats.retries}}",
+        "tone": "muted"
+       }
+      ]
+     },
+     {
+      "type": "spacer",
+      "height": 10
+     },
+     {
+      "type": "kv",
+      "label": "运行时长",
+      "value": "{{state.stats.uptime}} s"
+     },
+     {
+      "type": "kv",
+      "label": "在跑",
+      "value": "{{state.stats.inflight}}"
+     },
+     {
+      "type": "kv",
+      "label": "当前渠道",
+      "value": "{{state.active.active.0.channel}}"
+     },
+     {
+      "type": "kv",
+      "label": "当前模型",
+      "value": "{{state.active.active.0.model}}"
+     },
+     {
+      "type": "kv",
+      "label": "上下文",
+      "value": "{{state.active.active.0.prompt}} / {{state.active.active.0.window}}"
+     },
+     {
+      "type": "progress",
+      "value": "{{state.active.active.0.percent}}",
+      "max": 100
+     }
+    ]
+   },
+   {
+    "type": "row",
+    "gap": 8,
+    "children": [
+     {
+      "type": "text",
+      "text": "按渠道",
+      "style": "title",
+      "weight": 1
+     },
+     {
+      "type": "text",
+      "text": "请求 / 输入 / 输出",
+      "style": "caption"
+     }
+    ]
+   },
+   {
+    "type": "table",
+    "rows": "{{state.stats.byChannel}}",
+    "gap": 6,
+    "empty": "本周还没请求",
+    "columns": [
+     {
+      "key": "key",
+      "label": "渠道",
+      "weight": 3
+     },
+     {
+      "key": "requests",
+      "label": "请求",
+      "weight": 1
+     },
+     {
+      "key": "inputTokens",
+      "label": "输入",
+      "weight": 2
+     },
+     {
+      "key": "outputTokens",
+      "label": "输出",
+      "weight": 2
+     }
+    ]
+   }
+  ]
+ }
+}

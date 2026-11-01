@@ -1,0 +1,185 @@
+{
+ "gcui": 1,
+ "title": "总览",
+ "data": {
+  "instances": {},
+  "stats": {},
+  "active": {},
+  "requests": {
+   "limit": 6
+  }
+ },
+ "root": {
+  "type": "column",
+  "gap": 14,
+  "children": [
+   {
+    "type": "row",
+    "gap": 10,
+    "children": [
+     {
+      "type": "text",
+      "text": "{{state.inst}}",
+      "size": 22,
+      "bold": true,
+      "weight": 1
+     },
+     {
+      "type": "badge",
+      "text": "{{state.active.current}}",
+      "tone": "info"
+     }
+    ]
+   },
+   {
+    "type": "text",
+    "text": "{{state.active.active.0.channel}} · {{state.active.active.0.model}}",
+    "style": "caption"
+   },
+   {
+    "type": "grid",
+    "columns": 2,
+    "gap": 10,
+    "children": [
+     {
+      "type": "stat",
+      "label": "请求",
+      "value": "{{state.stats.requests}}",
+      "unit": "次",
+      "tone": "info"
+     },
+     {
+      "type": "stat",
+      "label": "错误",
+      "value": "{{state.stats.errors}}"
+     },
+     {
+      "type": "stat",
+      "label": "在跑",
+      "value": "{{state.stats.inflight}}"
+     },
+     {
+      "type": "stat",
+      "label": "上下文",
+      "value": "{{state.active.active.0.percent}}",
+      "unit": "%",
+      "tone": "warn"
+     }
+    ]
+   },
+   {
+    "type": "card",
+    "children": [
+     {
+      "type": "row",
+      "gap": 8,
+      "children": [
+       {
+        "type": "text",
+        "text": "上下文",
+        "style": "caption",
+        "weight": 1
+       },
+       {
+        "type": "text",
+        "text": "{{state.active.active.0.prompt}} / {{state.active.active.0.window}}",
+        "style": "caption"
+       }
+      ]
+     },
+     {
+      "type": "spacer",
+      "height": 8
+     },
+     {
+      "type": "progress",
+      "value": "{{state.active.active.0.percent}}",
+      "max": 100
+     }
+    ]
+   },
+   {
+    "type": "tabs",
+    "key": "dt",
+    "items": [
+     {
+      "label": "最近请求",
+      "children": [
+       {
+        "type": "table",
+        "rows": "{{state.requests}}",
+        "gap": 6,
+        "empty": "还没有请求",
+        "columns": [
+         {
+          "key": "model",
+          "label": "模型",
+          "weight": 3
+         },
+         {
+          "key": "duration",
+          "label": "ms",
+          "weight": 1,
+          "via": "{{item.duration}}",
+          "tone": "muted"
+         },
+         {
+          "key": "status",
+          "label": "状态",
+          "weight": 1,
+          "toneMap": {
+           "200": "ok",
+           "2xx": "ok",
+           "4xx": "warn",
+           "5xx": "danger"
+          }
+         }
+        ],
+        "rowAction": {
+         "type": "copy",
+         "text": "{{item.time}} {{item.model}} {{item.status}} {{item.duration}}ms"
+        }
+       }
+      ]
+     },
+     {
+      "label": "实例",
+      "children": [
+       {
+        "type": "table",
+        "rows": "{{state.instances.instances}}",
+        "gap": 6,
+        "columns": [
+         {
+          "key": "name",
+          "label": "实例",
+          "weight": 3
+         },
+         {
+          "key": "port",
+          "label": "端口",
+          "weight": 1
+         },
+         {
+          "key": "chCount",
+          "label": "渠道",
+          "weight": 1
+         },
+         {
+          "key": "running",
+          "label": "状态",
+          "weight": 1,
+          "toneMap": {
+           "true": "ok",
+           "false": "danger"
+          }
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ]
+ }
+}

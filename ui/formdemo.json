@@ -1,0 +1,55 @@
+{
+  "gcui": 1,
+  "title": "球外观（表单）",
+  "data": { "ball": {} },
+  "root": {
+    "type": "column",
+    "gap": 12,
+    "children": [
+      { "type": "text", "text": "改了直接生效，不用重编 APP", "style": "caption" },
+      {
+        "type": "card",
+        "children": [
+          {
+            "type": "input",
+            "key": "size",
+            "label": "气泡尺寸 (40-88dp)",
+            "inputType": "number",
+            "value": "{{state.ball.look.sizeDp}}"
+          },
+          {
+            "type": "input",
+            "key": "width",
+            "label": "指示环粗细 (60-200%)",
+            "inputType": "number",
+            "value": "{{state.ball.look.gaugeWidth}}"
+          },
+          {
+            "type": "switch",
+            "key": "snap",
+            "label": "贴边半隐藏",
+            "checked": "{{state.ball.look.snap}}"
+          },
+          {
+            "type": "button",
+            "text": "保存",
+            "style": "filled",
+            "action": {
+              "type": "intent",
+              "endpoint": "/admin/api/ball/{{state.inst}}",
+              "body": {
+                "look": {
+                  "sizeDp": "{{input.size}}",
+                  "gaugeWidth": "{{input.width}}",
+                  "snap": "{{input.snap}}"
+                }
+              },
+              "then": "reload"
+            }
+          }
+        ]
+      },
+      { "type": "kv", "label": "当前实例", "value": "{{state.inst}}" }
+    ]
+  }
+}

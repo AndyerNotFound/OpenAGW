@@ -1,0 +1,71 @@
+{
+ "gcui": 1,
+ "title": "实例",
+ "data": {
+  "instances": {}
+ },
+ "root": {
+  "type": "column",
+  "gap": 12,
+  "children": [
+   {
+    "type": "row",
+    "gap": 8,
+    "children": [
+     {
+      "type": "text",
+      "text": "实例",
+      "style": "title",
+      "weight": 1
+     },
+     {
+      "type": "badge",
+      "text": "本机网关",
+      "tone": "ok"
+     },
+     {
+      "type": "button",
+      "text": "刷新",
+      "style": "tonal",
+      "action": {
+       "type": "reload"
+      }
+     }
+    ]
+   },
+   {
+    "type": "table",
+    "rows": "{{state.instances.instances}}",
+    "gap": 8,
+    "empty": "没有实例",
+    "columns": [
+     {
+      "key": "name",
+      "label": "实例",
+      "weight": 3
+     },
+     {
+      "key": "port",
+      "label": "端口",
+      "weight": 1,
+      "via": "{{item.port}}"
+     },
+     {
+      "key": "chCount",
+      "label": "渠道",
+      "weight": 1
+     },
+     {
+      "key": "running",
+      "label": "状态",
+      "weight": 1,
+      "toneMap": {
+       "true": "ok",
+       "false": "danger"
+      }
+     }
+    ]
+   }
+  ]
+ }
+}

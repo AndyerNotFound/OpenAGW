@@ -1,0 +1,52 @@
+{
+ "gcui": 1,
+ "title": "日志",
+ "data": {
+  "logs": {
+   "lines": 150
+  }
+ },
+ "root": {
+  "type": "column",
+  "gap": 10,
+  "children": [
+   {
+    "type": "row",
+    "gap": 8,
+    "children": [
+     {
+      "type": "text",
+      "text": "{{state.inst}} · 日志",
+      "style": "title",
+      "weight": 1
+     },
+     {
+      "type": "button",
+      "text": "刷新",
+      "style": "tonal",
+      "action": {
+       "type": "reload"
+      }
+     }
+    ]
+   },
+   {
+    "type": "card",
+    "children": [
+     {
+      "type": "list",
+      "items": "{{state.logs.lines}}",
+      "gap": 2,
+      "empty": "没有日志",
+      "template": {
+       "type": "text",
+       "text": "{{item.value}}",
+       "style": "mono",
+       "size": 11
+      }
+     }
+    ]
+   }
+  ]
+ }
+}

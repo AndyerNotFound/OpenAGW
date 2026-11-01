@@ -1,0 +1,20 @@
+ai-gateway for Debian/Ubuntu
+=============================
+
+Code installs to /opt/ai-gateway, runtime data to /var/lib/ai-gateway.
+data/ is a symlink, so all documented relative paths keep working.
+
+Quick start:
+  systemctl status ai-gateway
+  curl -k https://127.0.0.1:16384/health
+  /opt/ai-gateway/agw.sh status
+
+CLI (agw) is NOT in PATH by default; use:
+  ln -s /opt/ai-gateway/agw.js /usr/local/bin/agw
+
+First install: edit /var/lib/ai-gateway/config.json (set your API key),
+
+(copied from /opt/ai-gateway/config.default.json at first install; upgrades never touch /var/lib). .agwkey auto-generated at first install (600).
+
+Encryption: config*.json are AGWENC1 (AES-256-GCM) encrypted with
+/var/lib/ai-gateway/.agwkey - treat it as the root secret, backup both.

@@ -1,0 +1,1028 @@
+#!/usr/bin/env node
+'use strict';
+/**
+ * 悬浮球 / 页面 JSON 的终端工具（直接改文件，网关每次请求现读，APP 60s 轮询后生效）
+ *
+ * 查看（不知道写什么就先看这里）
+ *   ballctl get all                 所有组分组列出 + 每组一句话说明
+ *   ballctl get ring                组可用的键 + 每个键能填什么 + 例子
+ *   ballctl get data                当前能查询的数据，展开成真实 JSON
+ *   ballctl get touch               所有可用的触发方式（手势 / 系统事件 / 外部广播）
+ *   ballctl                         交互模式（中文菜单）
+ *   ballctl get                     当前完整配置（原始 JSON）
+ *   ballctl get sizeDp              单个键当前的值
+ *   ballctl get ring 0              组里第 N 项当前的值
+ *   ballctl show                    中文摘要
+ *   ballctl diff                    只看本实例覆盖了全局哪些键
+ *
+ * 修改（键不存在就新增）
+ *   ballctl edit sizeDp 60                  标量键
+ *   ballctl edit rings 0 ctxSoft:warn       组里第 0 项改成这个
+ *   ballctl edit rings + 35/100:info        追加一项（+ 表示末尾）
+ *   ballctl edit rows ctx '上下文={{state.ctxText}}'
+ *   ballctl edit radial 刷新 reload
+ *   ballctl edit bubble offline 断了
+ *   ballctl edit on tap expand
+ *   ballctl edit ringStyle mode bars
+ *
+ * 排序 / 整组替换（顺序 = 参数顺序）
+ *   ballctl set rings ctxSoft:warn ctxHard:ok balance:danger
+ *   ballctl set rows '实例={{state.inst}}' '请求={{state.requests}}'
+ *   ballctl set radial 刷新=reload APP=open:overview
+ *   ballctl set on tap=expand longPress=menu
+ *
+ * 删除
+ *   ballctl rm sizeDp            删一个键
+ *   ballctl rm rings 1          删组里第 1 项
+ *   ballctl rm rows ctx         删 key 为 ctx 的行
+ *   ballctl reset               删掉本实例覆盖（回到全局）
+ *
+ * 可视化编辑（不想记参数就用网页）
+ *   ballctl url                      打印带密码的编辑器地址，浏览器直接开
+ *
+ * 事件（系统广播 / 通知 / 脚本触发 → 球动作）
+ *   ballctl ev list                         列出现有规则
+ *   ballctl ev add battery_low bubble:{{event.pct}}% lt=15 cd=600
+ *   ballctl ev add notif notify:消息|{{event.title}} match=com.tencent.tim
+ *   ballctl ev add charging expand
+ *   ballctl ev add screen_off collapse cd=5
+ *   ballctl ev rm 0                         删第 0 条
+ *   ballctl ev fire battery_low pct=42 temp=31.5    手动打一发（走 rish）
+ *
+ * 事件名: battery battery_low battery_full charging screen_on screen_off unlock
+ *         headset_in headset_out network vol notif + 自定义(ev fire 里自己起名)
+ *
+ * 其他
+ *   ballctl check data          检查所有 data 路径能不能取到值（真去问网关）
+ *   ballctl watch               盯 hash 变化，确认 APP 有没有拉到
+ *   ballctl ui list|get|set|del 页面 JSON
+ *
+ * 实例名：省略 = 当前实例；前缀写 global 改全局 ball.json
+ * 例: ballctl global get rings    /    ballctl WorkBuddy2API show
+ */
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const http = require('https');
+
+const DIR = path.join(os.homedir(), 'ai-gateway', 'data');
+const CA_PEM = path.join(DIR, 'tls', 'ca.pem');
+const TONES = ['ok', 'warn', 'danger', 'info', 'muted', 'primary'];
+const SCOLOR = /^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+const SCALARS = {
+  sizeDp: { range: [40, 88], desc: '球的直径 dp' },
+  gaugeWidth: { range: [60, 200], desc: '环粗细 %' },
+  panelDp: { range: [240, 340], desc: '展开面板宽度 dp' },
+  scale: { range: [0.8, 1.3], desc: '整体缩放' },
+  shape: { range: [0, 3], desc: '形状 0圆 1方 2胶囊 3自定义' },
+  pill: { range: [0, 2], desc: '球外文字样式' },
+  chip: { range: [0, 3], desc: '状态栏芯片样式' },
+  rowsMask: { range: [0, 63], desc: '旧版行掩码（用 rows 代替）' },
+  dimSec: { range: [1, 30], desc: '几秒后变暗' },
+  dimAlpha: { range: [10, 100], desc: '变暗后透明度 %' },
+  balanceWarnBelow: { range: [0, 1000000], desc: '余额低于多少告警' },
+  gaugeColor: { color: true, desc: '环颜色 #RRGGBB' },
+  bg: { color: true, desc: '球底色 #RRGGBB' },
+  snap: { bool: true, desc: '贴边半隐藏' },
+  dim: { bool: true, desc: '闲置变暗' },
+  blur: { bool: true, desc: '背景模糊' },
+  lock: { bool: true, desc: '锁定位置' },
+  balanceRow: { bool: true, desc: '面板显示余额行' },
+  pinExpanded: { bool: true, desc: '常驻展开' },
+  iconUri: { str: true, desc: '球图标' },
+  rowsOrder: { str: true, desc: '旧版行顺序' },
+  phrases: { list: true, desc: '点击时说的话（数组）' }
+};
+/**
+ * 组的说明书。keys 每项: [键名, 能填什么, 一句话]
+ * `ballctl get all` 和 `ballctl get <组>` 都从这里生成。
+ */
+const META = {
+  ring: {
+    desc: '球外圈的一圈进度环，order 小的在外侧（超过 6 圈就挤了）',
+    ex: 'ballctl set ring ctxSoft:warn ctxHard:ok balance:danger',
+    keys: [
+      ['order', '0..99', '排序，越小越靠外'],
+      ['data', '内置名 | 点路径 | 路径/除数', 'ctxSoft   balance   stats.requests/1000'],
+      ['color', 'ok warn danger info muted primary | #RRGGBB', '裸 hex 会被忽略并记日志']
+    ]
+  },
+  content: {
+    desc: '展开面板里的一行',
+    ex: "ballctl set content '实例={{state.inst}}' '请求={{state.requests}}'",
+    keys: [
+      ['order', '0..99', '排序'],
+      ['label', '≤24 字', '行左边的标题'],
+      ['data', '内置名 | 点路径', '决定这一行什么时候刷新'],
+      ['text', '≤200 字', '行右边的正文，可写 {{state.xxx}}']
+    ]
+  },
+  radial: {
+    desc: '按钮环：参数在 radial，按钮是 radial_<n>（label + do）',
+    ex: 'ballctl set radial 刷新=reload APP=open:overview',
+    keys: [
+      ['order', '0..99', '按钮顺序'],
+      ['label', '≤8 字', '按钮上的字'],
+      ['do', '动作', '点了干什么'],
+      ['radius', '40..160 dp', '写在 radial 组里的环半径']
+    ]
+  },
+  touch: {
+    desc: '手势 → 动作（一组一个手势）',
+    ex: 'ballctl set touch click=expand double=reload long=menu',
+    keys: [
+      ['order', '0..99', '排序'],
+      ['on', 'click | double | long | long_hold', '手势名'],
+      ['do', '动作', 'click/double/long 干什么'],
+      ['hold', '100..2000 毫秒', 'long_hold 的阈值']
+    ]
+  },
+  when: {
+    desc: '事件规则：一条事件一个动作',
+    ex: 'ballctl ev add battery_low bubble:电量{{event.pct}}% lt=15 cd=600',
+    keys: [
+      ['order', '0..99', '排序，只影响日志顺序'],
+      ['on', '事件名', 'battery battery_low charging notif … 见 get touch'],
+      ['field', 'pct | temp | vol | value', 'lt/gt 拿来比哪个数，默认 value'],
+      ['lt / gt', '数字', '小于 / 大于；两个都写就是区间'],
+      ['eq', '字符串', '等于；对象文字面（ssid/pkg/title/text）用包含匹配'],
+      ['match', '字符串（可带 *）', '在 ssid/pkg/title/text 里找'],
+      ['cooldown', '0..86400 秒', '多久内不重复触发，默认 30'],
+      ['label', '≤24 字', '日志里怎么称呼它'],
+      ['do', '动作对象', '命中之后干什么']
+    ]
+  },
+  chain: {
+    desc: '连锁：一条事件触发多个动作，段与段之间可延时',
+    ex: 'ballctl chain add charging bubble:充电中 notify:已插电|{{event.pct}}% delay=1',
+    keys: [
+      ['order', '0..99', '排序'],
+      ['on', '事件名', '同 when'],
+      ['lt / gt / eq / match / field', '同 when', '条件'],
+      ['delay', '0..60 秒', '动作之间的间隔'],
+      ['do', '动作数组', '1..8 条，按顺序跑'],
+      ['cooldown', '0..86400 秒', '冷却']
+    ]
+  },
+  noti: {
+    desc: '发一条系统消息（写配置 + 立即广播，两条路都走）',
+    ex: "ballctl noti '编译完成 12s' name=网关 silence=1",
+    keys: [
+      ['name', '≤24 字', '发送者 = 通知标题'],
+      ['text', '≤200 字', '内容，可写 {{stats.requests}} 拉数据'],
+      ['time', '≤32 字', '只用于去重，不显示'],
+      ['silence', '1 | 0', '1 = 静默通道（无声音）']
+    ]
+  },
+  perform: {
+    desc: '球的整体表现（远程下发就会生效）',
+    ex: 'ballctl edit perform alpha 85',
+    keys: [
+      ['zoom', '0.5..2', '环线宽与面板字号一起缩放'],
+      ['alpha', '0..100 或 #RRGGBBAA', '整个窗口透明度'],
+      ['roll', '秒', '轮播（已解析，未生效）'],
+      ['side', '秒', '秒级自动缩边（已解析，未生效）'],
+      ['dark', '秒', '秒级变暗（已解析，未生效）'],
+      ['lock', '0/1', '锁住位置（已解析，未生效）'],
+      ['icon', 'URL 或留空', '换球图标（已解析，未生效）']
+    ]
+  },
+  bubble: {
+    desc: '球上方那行字',
+    ex: 'ballctl edit bubble text {{state.ctxPct}}% · {{state.balance}}',
+    keys: [
+      ['order', '0..99', '优先级'],
+      ['data', '内置名 | 点路径', '决定刷新时机'],
+      ['text', '字符串 或 数组', '显示内容，可写 {{state.xxx}}']
+    ]
+  },
+  ringStyle: {
+    desc: '环怎么画',
+    ex: 'ballctl edit ringStyle mode bars',
+    keys: [
+      ['mode', 'ring | bars', '整圈环 / 侧边竖条'],
+      ['stroke', 'dp', '线宽'],
+      ['gap', 'dp', '环与环的间距'],
+      ['side', '1 | -1', '贴哪条边']
+    ]
+  }
+};
+
+const ACTIONS = ['expand', 'collapse', 'toggle', 'menu', 'reload', 'open:页面', 'copy:文本',
+  'toast:文本', 'mute:分钟', 'intent:/admin/api/...', 'sequence', 'bubble:文本', 'notify:标题|正文'];
+/** 系统事件名 → 说明（EventWatch/NotifHook 发什么，这里就是什么） */
+const EVENTS = {
+  battery: '电量变化（每次系统电量广播）',
+  battery_low: '电量 ≤15%',
+  battery_full: '充满',
+  charging: '插上电源',
+  discharging: '拔掉电源',
+  screen_on: '亮屏',
+  screen_off: '熄屏',
+  unlock: '解锁进入桌面',
+  headset_in: '插入耳机',
+  headset_out: '拔出耳机',
+  network: '网络切换（ssid=wifi/mobile/ethernet/none）',
+  vol: '媒体音量变化（20 秒采一次）',
+  notif: '收到通知（pkg/title/text）'
+};
+
+/** 内置量: APP 侧现算，命令行取不到值 */
+const BUILTIN = ['ctxSoft', 'ctxHard', 'ctxPct', 'balance', 'requests', 'errors', 'uptime', 'online'];
+const DENY = ['config.gatewayKey', 'config.adminKey', 'stats.byKey'];
+const VARS = ['inst', 'port', 'requests', 'errors', 'uptime', 'online', 'ctxPct', 'ctxText', 'ctxModel', 'ctxChannel', 'ctxAgo', 'route', 'balance', 'mode'];
+
+function die(m) { console.error('错误: ' + m); process.exit(1); }
+function instances() {
+  const out = [];
+  try { for (const f of fs.readdirSync(DIR)) { const m = /^ball\.(.+)\.json$/.exec(f); if (m) out.push(m[1]); } } catch (_) {}
+  out.push('global');
+  return out;
+}
+function activeInstance() {
+  const all = instances().filter(x => x !== 'global');
+  return all.length === 1 ? all[0] : (all[0] || 'global');
+}
+function fileFor(inst) {
+  return (!inst || inst === 'global') ? path.join(DIR, 'ball.json') : path.join(DIR, 'ball.' + inst + '.json');
+}
+function readJson(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (_) { return {}; } }
+function writeJson(p, o) { fs.writeFileSync(p, JSON.stringify(o, null, 1) + '\n'); }
+function merged(inst) {
+  const g = readJson(fileFor('global'));
+  const o = inst === 'global' ? g : Object.assign({}, g, readJson(fileFor(inst)));
+  return o;
+}
+
+function parseRing(s) {
+  const [left, color] = s.split(':');
+  if (color && !TONES.includes(color)) die('颜色只能 ' + TONES.join('/') + '：' + s);
+  if (left.includes('/')) {
+    const [v, m] = left.split('/').map(Number);
+    if (!Number.isFinite(v) || !Number.isFinite(m)) die('值写法应为 35/100:info：' + s);
+    return { value: v, max: m, color: color || 'primary' };
+  }
+  return { data: left, color: color || 'primary' };
+}
+function parseAction(spec) {
+  const i = spec.indexOf(':');
+  const type = i < 0 ? spec : spec.slice(0, i);
+  const arg = i < 0 ? null : spec.slice(i + 1);
+  const a = { type };
+  if (arg) {
+    if (type === 'open') a.page = arg;
+    else if (type === 'mute') a.minutes = Number(arg) || 30;
+    else if (type === 'intent') a.endpoint = arg;
+    else a.text = arg;
+  }
+  return a;
+}
+function splitKV(s, what) {
+  const i = s.indexOf('=');
+  if (i < 0) die(what + ' 写法应为 键=值：' + s);
+  return [s.slice(0, i), s.slice(i + 1)];
+}
+
+/** 整组重写: ring_0 ring_1 … 顺序 = 数组顺序 */
+function setGroup(o, prefix, items) {
+  for (const k of Object.keys(o)) if (k.indexOf(prefix) === 0) delete o[k];
+  items.forEach((it, i) => { o[prefix + i] = Object.assign({ order: i }, it); });
+  return items.length;
+}
+
+function touchSpec(s) {
+  const [k, a] = splitKV(s, '手势');
+  if (k === 'long_hold') return { on: k, hold: Number(a) || 500 };
+  if (!['click', 'double', 'long'].includes(k)) die('手势只能是 click/double/long/long_hold');
+  return { on: k, do: parseAction(a) };
+}
+
+function applySet(o, g, specs) {
+  if (g === 'ring') return setGroup(o, 'ring_', specs.map(parseRing)) + ' 圈';
+  if (g === 'content') {
+    return setGroup(o, 'content_', specs.map(s => {
+      const [l, v] = splitKV(s, '行');
+      return { label: l, text: v };
+    })) + ' 行';
+  }
+  if (g === 'radial') {
+    return setGroup(o, 'radial_', specs.map(s => {
+      const [l, a] = splitKV(s, '按钮');
+      return { label: l, do: parseAction(a) };
+    })) + ' 个按钮';
+  }
+  if (g === 'touch') return setGroup(o, 'touch_', specs.map(touchSpec)) + ' 个手势';
+  if (g === 'ringStyle') {
+    o.ringStyle = o.ringStyle || {};
+    for (const s of specs) {
+      const [k, v] = splitKV(s, 'ringStyle');
+      o.ringStyle[k] = ['mode', 'side'].includes(k) ? v : Number(v);
+    }
+    return JSON.stringify(o.ringStyle);
+  }
+  die('set 只支持 ring / content / radial / touch / ringStyle');
+}
+
+const PREFIX = { ring: 'ring_', content: 'content_', radial: 'radial_', touch: 'touch_', chain: 'chain_' };
+
+function applyEdit(o, g, sel, val) {
+  if (g === 'ring') {
+    const list = itemsNew(o, 'ring');
+    if (sel === '+') {
+      const r = parseRing(val);
+      o['ring_' + list.length] = Object.assign({ order: list.length }, r);
+      return JSON.stringify(o['ring_' + list.length]);
+    }
+    const hit = list[Number(sel)] || list.find(x => (x.value.data || '') === sel);
+    if (!hit) die('没有这一圈（ballctl get ring 看列表）');
+    o[hit.key] = Object.assign({ order: hit.value.order === undefined ? Number(sel) || 0 : hit.value.order }, parseRing(val));
+    return JSON.stringify(o[hit.key]);
+  }
+  if (g === 'content') {
+    const list = itemsNew(o, 'content');
+    const hit = list[Number(sel)] || list.find(x => x.value.label === sel);
+    if (!hit) die('没有这一行（ballctl get content 看列表）');
+    const kv = val.includes('=') ? splitKV(val, '行') : [hit.value.label, val];
+    hit.value.label = kv[0];
+    hit.value.text = kv[1];
+    o[hit.key] = hit.value;
+    return JSON.stringify(hit.value);
+  }
+  if (g === 'radial') {
+    if (sel === 'radius') {
+      o.radial = o.radial || {};
+      o.radial.radius = Number(val);
+      return JSON.stringify(o.radial);
+    }
+    const list = itemsNew(o, 'radial');
+    const hit = list.find(x => x.value.label === sel) || list[Number(sel)];
+    if (hit) {
+      hit.value.do = parseAction(val);
+      o[hit.key] = hit.value;
+      return JSON.stringify(hit.value);
+    }
+    o['radial_' + list.length] = { order: list.length, label: sel, do: parseAction(val) };
+    return JSON.stringify(o['radial_' + list.length]);
+  }
+  if (g === 'touch') {
+    const list = itemsNew(o, 'touch');
+    const hit = list.find(x => x.value.on === sel);
+    const spec = touchSpec(sel + '=' + val);
+    if (hit) {
+      o[hit.key] = Object.assign({ order: hit.value.order || 0 }, spec);
+      return JSON.stringify(o[hit.key]);
+    }
+    o['touch_' + list.length] = Object.assign({ order: list.length }, spec);
+    return JSON.stringify(o['touch_' + list.length]);
+  }
+  if (['ringStyle', 'perform', 'bubble', 'noti'].includes(g)) {
+    o[g] = o[g] || {};
+    const numKeys = ['order', 'stroke', 'gap', 'zoom', 'alpha', 'roll', 'side', 'dark', 'lock', 'silence', 'radius'];
+    o[g][sel] = numKeys.includes(sel) ? Number(val) : val;
+    return JSON.stringify(o[g]);
+  }
+  if (g === 'chain') die('chain 用 ballctl chain add / rm');
+  die('edit 不支持 ' + g);
+}
+
+// ---------------- 事件规则 ----------------
+function evRules(o) {
+  const out = [];
+  for (const k of Object.keys(o)) {
+    if (!/^when_[a-zA-Z0-9_]{1,16}$/.test(k)) continue;
+    const r = o[k] || {};
+    out.push({ key: k, order: r.order === undefined ? 99 : Number(r.order), r });
+  }
+  out.sort((x, y) => x.order - y.order || String(x.key).localeCompare(String(y.key)));
+  return out;
+}
+
+function evDesc(r) {
+  const c = [];
+  if (r.lt !== undefined) c.push('<' + r.lt);
+  if (r.gt !== undefined) c.push('>' + r.gt);
+  if (r.eq !== undefined) c.push('=' + r.eq);
+  if (r.match !== undefined) c.push('匹配 ' + r.match);
+  if (r.field !== undefined) c.push('看 ' + r.field);
+  const a = r.do || {};
+  const arg = a.text ? ' "' + a.text + '"' : a.page ? ' ' + a.page : '';
+  return 'on=' + r.on + (c.length ? ' ' + c.join(' ') : '') + '  →  ' + a.type + arg +
+    '   冷却 ' + (r.cooldown === undefined ? 30 : r.cooldown) + 's';
+}
+
+function evAction(spec) {
+  if (!spec) die('缺动作（bubble:文本 / notify:标题|正文 / toast:文本 / expand / collapse / menu / reload / open:页面）');
+  if (spec.startsWith('bubble:')) return { type: 'bubble', text: spec.slice(7) };
+  if (spec.startsWith('notify:')) {
+    const p2 = spec.slice(7).split('|');
+    return { type: 'notify', title: p2[0] || '悬浮球', text: p2[1] || '' };
+  }
+  if (spec.startsWith('toast:')) return { type: 'toast', text: spec.slice(6) };
+  if (['expand', 'collapse', 'toggle', 'menu', 'reload', 'think'].includes(spec)) return { type: spec };
+  if (spec.startsWith('open:')) return { type: 'open', page: spec.slice(5) };
+  if (spec.startsWith('mute')) return { type: 'mute', minutes: 30 };
+  die('不认识的动作 ' + spec);
+}
+
+function evFreeKey(o) {
+  for (let i = 0; i < 16; i++) if (!o['when_' + i]) return 'when_' + i;
+  die('规则已满 16 条');
+}
+
+function evFire(on, extras) {
+  const rish = path.join(os.homedir(), 'Shizuku', 'rish');
+  if (!fs.existsSync(rish)) die('找不到 ' + rish);
+  const q = s2 => "'" + String(s2).replace(/'/g, "'\\''") + "'";
+  let c = 'am broadcast -n com.aigateway.app/.overlay.EventReceiver -a com.aigateway.app.EVENT --es k ' + q(on);
+  for (const e of extras) {
+    const i = e.indexOf('=');
+    if (i < 0) continue;
+    c += ' --es ' + e.slice(0, i) + ' ' + q(e.slice(i + 1));
+  }
+  const { execFileSync } = require('child_process');
+  try {
+    execFileSync(rish, ['-c', c], { stdio: ['ignore', 'ignore', 'inherit'], timeout: 20000 });
+  } catch (err) {
+    die('发送失败: ' + err.message + '（Shizuku 在跑吗）');
+  }
+  // balld (agw-ball daemon) listens via trigger.json; APP pet gets the am broadcast
+  try {
+    const tf = path.join(os.homedir(), 'agw-ball', 'trigger.json');
+    const ev = {};
+    for (const e of extras) { const i = e.indexOf('='); if (i > 0) ev[e.slice(0, i)] = e.slice(i + 1); }
+    fs.appendFileSync(tf, JSON.stringify({ on, ev }) + '\n');
+  } catch (e) { /* balld not installed: fine */ }
+  console.log('  已发送 ' + on + (extras.length ? ' ' + extras.join(' ') : ''));
+}
+
+function validateScalar(k, v) {
+  const spec = SCALARS[k];
+  if (!spec) die('未知键 ' + k + '（可用: ' + Object.keys(SCALARS).join(', ') + '）');
+  if (spec.range) {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < spec.range[0] || n > spec.range[1]) die(k + ' 需 ' + spec.range[0] + '..' + spec.range[1]);
+    return n;
+  }
+  if (spec.bool) {
+    if (v === 'true' || v === true) return true;
+    if (v === 'false' || v === false) return false;
+    die(k + ' 只能 true/false');
+  }
+  if (spec.color) {
+    if (/^-?\d+$/.test(v) && Number(v) === 0) return 0;
+    if (!SCOLOR.test(v)) die(k + ' 需 #RRGGBB / #AARRGGBB / 0');
+    return v;
+  }
+  if (spec.list) {
+    return String(v).split(',').map(s => s.trim()).filter(Boolean);
+  }
+  return String(v);
+}
+
+const GROUP_ALIAS = {
+  ring: 'ring', rings: 'ring', 'ring_': 'ring',
+  content: 'content', contents: 'content', rows: 'content', row: 'content',
+  when: 'when', 'when_': 'when', events: 'when', ev: 'when',
+  radial: 'radial', menu: 'radial',
+  perform: 'perform', bubble: 'bubble',
+  touch: 'touch', thing: 'touch', on: 'touch', gesture: 'touch',
+  chain: 'chain', noti: 'noti', msg: 'noti',
+  ringStyle: 'ringStyle', style: 'ringStyle'
+};
+
+/** 新格式的组: ring_0 ring_1 … 按 order 排 */
+function itemsNew(o, prefix) {
+  const pre = prefix.replace(/_+$/, '') + '_';
+  return Object.keys(o)
+    .filter(k => k.indexOf(pre) === 0)
+    .sort((x, y) => (o[x].order === undefined ? 99 : o[x].order) - (o[y].order === undefined ? 99 : o[y].order))
+    .map(k => ({ key: k, value: o[k] }));
+}
+
+function countOf(o, g) {
+  if (g === 'ring') return itemsNew(o, 'ring').length;
+  if (g === 'content') return itemsNew(o, 'content').length;
+  if (g === 'radial') return itemsNew(o, 'radial').length;
+  if (g === 'touch') return itemsNew(o, 'touch').length;
+  if (g === 'when') return evRules(o).length;
+  if (g === 'chain') return itemsNew(o, 'chain').length;
+  if (g === 'bubble') return 1;
+  return o[g] === undefined ? 0 : 1;
+}
+
+function getItem(o, g, sel) {
+  const pool = g === 'ring' ? itemsNew(o, 'ring')
+    : g === 'content' ? itemsNew(o, 'content')
+      : g === 'radial' ? itemsNew(o, 'radial')
+        : g === 'touch' ? itemsNew(o, 'touch')
+          : g === 'chain' ? itemsNew(o, 'chain')
+            : g === 'when' ? evRules(o).map(x => ({ key: x.key, value: x.r }))
+              : [{ key: g, value: o[g] }];
+  return pool.find(x => String(x.key) === String(sel)) || pool[Number(sel)];
+}
+
+/** ballctl get all */
+function printAll(o) {
+  o = o || merged(inst);
+  console.log('\n标量（ballctl edit <键> <值>）');
+  for (const [k, sp] of Object.entries(SCALARS)) {
+    const hint = sp.range ? sp.range[0] + '..' + sp.range[1] : sp.bool ? 'true/false' : sp.color ? '#RRGGBB' : sp.list ? 'a,b,c' : '文本';
+    const cur = o[k] === undefined ? '' : '   当前 ' + o[k];
+    console.log('  ' + k.padEnd(18) + hint.padEnd(15) + sp.desc + cur);
+  }
+  console.log('\n组（ballctl get <组> 看它的键；set / edit <组> 改）');
+  for (const [g, m] of Object.entries(META)) {
+    const n = countOf(o, g);
+    console.log('  ' + g.padEnd(10) + (n ? n + ' 条' : '未设置').padEnd(8) + m.desc);
+    console.log('  ' + ' '.repeat(10) + '键: ' + m.keys.map(k => k[0]).join(' ') + '    例: ' + m.ex);
+  }
+  console.log('\n事件（ballctl ev list | add | rm | fire）');
+  Object.entries(EVENTS).forEach(([k, v]) => console.log('  ' + k.padEnd(14) + v));
+  console.log('\n动作类型  ' + ACTIONS.join('  '));
+  console.log('颜色档    ' + TONES.join('  '));
+  console.log('数据写法  ballctl get data     触发方式  ballctl get touch');
+  console.log('模板变量  ' + VARS.map(v => '{{state.' + v + '}}').join(' '));
+  console.log('');
+}
+
+/** ballctl get <组> */
+function printGroup(g, o) {
+  const m = META[g];
+  if (!m) die('不认识 ' + g + '（ballctl get all 看有哪些）');
+  console.log('\n' + g + '  ' + m.desc + '\n');
+  const w = Math.max(...m.keys.map(k => k[0].length));
+  const wv = Math.max(...m.keys.map(k => k[1].length));
+  for (const [k, v, d] of m.keys) console.log('  ' + k.padEnd(w + 2) + v.padEnd(wv + 2) + d);
+  console.log('\n  例: ' + m.ex);
+  const cur = ['ring', 'content', 'radial', 'touch', 'chain'].includes(g) ? itemsNew(o, g)
+    : g === 'when' ? evRules(o).map(x => ({ key: x.key, value: x.r })) : [];
+  if (cur.length) {
+    console.log('\n  当前 ' + cur.length + ' 条:');
+    cur.forEach((x, i) => console.log('    [' + i + '] ' + x.key + '  ' + JSON.stringify(x.value)));
+  } else if (o[g] !== undefined) {
+    console.log('\n  当前: ' + JSON.stringify(o[g]));
+  } else console.log('\n  当前未设置');
+  console.log('');
+}
+
+/** ballctl get touch */
+function printTouch(o) {
+  console.log('\n手势（球本体，touch_<n>；ballctl set touch click=expand）');
+  console.log('  click      单击');
+  console.log('  double     双击（280ms 内两下）');
+  console.log('  long       长按');
+  console.log('  long_hold  长按阈值 100..2000 毫秒（当前 ' + ((o.thing || {}).long_hold || 500) + '）');
+  itemsNew(o, 'touch').forEach(x => {
+    const v = x.value || {};
+    console.log('  → 当前 ' + v.on + ' = ' + (v.hold ? v.hold + 'ms' : (v.do && v.do.type) || '?'));
+  });
+
+  console.log('\n系统事件（走 when_<n>，ballctl ev add <事件名> <动作>）');
+  Object.entries(EVENTS).forEach(([k, v]) => console.log('  ' + k.padEnd(14) + v));
+
+  console.log('\n外部触发（脚本 / Termux / 网关）');
+  console.log('  ballctl ev fire <事件名> [pct=42 text=编译完成 pkg=com.x title=…]');
+  console.log('  am broadcast -n com.aigateway.app/.overlay.EventReceiver -a com.aigateway.app.EVENT --es k <事件名>');
+  console.log('  （只给 -a 不给 -n 这台机器不投递，必须带 -n）');
+  console.log('');
+}
+
+/** ballctl get data */
+function redact(x) {
+  if (Array.isArray(x)) return x.map(redact);
+  if (x && typeof x === 'object') {
+    const out = {};
+    for (const k of Object.keys(x)) {
+      const secret = /(gatewayKey|adminKey|apiKey|authKey|secret|password)$/i.test(k);
+      out[k] = secret && typeof x[k] === 'string' ? '***' : redact(x[k]);
+    }
+    return out;
+  }
+  return x;
+}
+
+function dataTree(inst) {
+  const roots = {
+    stats: '/admin/api/stats?instance=' + encodeURIComponent(inst),
+    active: '/admin/api/active',
+    config: '/admin/api/config/' + encodeURIComponent(inst),
+    instances: '/admin/api/instances'
+  };
+  const jobs = Object.entries(roots).map(([k, pathname]) => getJson(pathname).then(v => [k, v]));
+  Promise.all(jobs).then(pairs => {
+    const snap = { inst };
+    pairs.forEach(([k, v]) => { snap[k] = v; });
+    snap.local = { note: 'APP 本地量，命令行取不到值' };
+    console.log('\n当前能查到的数据（实例 ' + inst + '）\n');
+    console.log(JSON.stringify(redact(snap), null, 1));
+    console.log('\n内置量（APP 侧算，命令行无值）  ' + BUILTIN.join('  '));
+    console.log('敏感路径（APP 拒绝）             ' + DENY.join('  '));
+    console.log('写法: 点路径 stats.requests  |  路径/除数 stats.requests/1000  |  内置名 balance');
+    console.log('');
+  });
+}
+
+function show(inst) {
+  const o = merged(inst);
+  const line = (l, val, hint) => console.log('  ' + l + '  ' + String(val === undefined ? '（默认）' : val) + '  ' + (hint || ''));
+  console.log('\n球配置：' + inst + '   (' + fileFor(inst) + ')');
+  line('尺寸', o.sizeDp, 'dp');
+  line('环粗细', o.gaugeWidth, '%');
+  line('颜色', o.gaugeColor, '');
+  const rk = Object.keys(o).filter(k => /^ring_/.test(k)).sort((x, y) => (o[x].order || 0) - (o[y].order || 0));
+  const ck = Object.keys(o).filter(k => /^content_/.test(k)).sort((x, y) => (o[x].order || 0) - (o[y].order || 0));
+  if (rk.length) line('环(新)', rk.length + ' 个', rk.map(k => (o[k].data || '?') + ':' + (o[k].color || 'primary')).join('  '));
+  if (ck.length) line('面板行(新)', ck.length + ' 行', ck.map(k => o[k].label || k).join(' '));
+  const rl = itemsNew(o, 'radial');
+  line('按钮菜单', rl.length + ' 项', rl.map(x => x.value.label).join(' '));
+  const tc = itemsNew(o, 'touch');
+  line('手势', tc.length + ' 个', tc.map(x => x.value.on).join(' '));
+  const evs = evRules(o);
+  line('事件规则', evs.length + ' 条', evs.map(x => x.r.on).join(' '));
+  const ch = itemsNew(o, 'chain');
+  if (ch.length) line('连锁', ch.length + ' 条', ch.map(x => x.value.on + '×' + (x.value.do || []).length).join(' '));
+  if (o.noti) line('noti', (o.noti.name || '') + ' / ' + (o.noti.text || '空'), o.noti.time || '');
+  console.log('');
+}
+
+function api(inst, cb) {
+  let key = '';
+  try { key = fs.readFileSync(path.join(os.homedir(), '.ballkey'), 'utf8').trim(); } catch (_) {}
+  const req = http.request({
+    host: '127.0.0.1', port: 16384, path: '/admin/api/ball/' + encodeURIComponent(inst),
+    method: 'GET', ca: fs.existsSync(CA_PEM) ? fs.readFileSync(CA_PEM) : undefined,
+    rejectUnauthorized: !fs.existsSync(CA_PEM), headers: key ? { 'x-admin-key': key } : {}
+  }, res => { let b = ''; res.on('data', d => b += d); res.on('end', () => { try { cb(null, JSON.parse(b)); } catch (e) { cb(e); } }); });
+  req.on('error', e => cb(e));
+  req.end();
+}
+
+// ---------------- check data ----------------
+function getJson(pathname) {
+  return new Promise(resolve => {
+    let key = '';
+    try { key = fs.readFileSync(path.join(os.homedir(), '.ballkey'), 'utf8').trim(); } catch (_) {}
+    const req = http.request({
+      host: '127.0.0.1', port: 16384, path: pathname, method: 'GET',
+      ca: fs.existsSync(CA_PEM) ? fs.readFileSync(CA_PEM) : undefined,
+      rejectUnauthorized: !fs.existsSync(CA_PEM), headers: key ? { 'x-admin-key': key } : {}
+    }, res => {
+      let b = '';
+      res.on('data', d => b += d);
+      res.on('end', () => { try { resolve(JSON.parse(b)); } catch (e) { resolve(null); } });
+    });
+    req.on('error', () => resolve(null));
+    req.end();
+  });
+}
+
+function pick(obj, path) {
+  let cur = obj;
+  for (const part of path.split('.')) {
+    if (cur === null || cur === undefined) return undefined;
+    if (Array.isArray(cur)) { const i = Number(part); if (!Number.isFinite(i)) return undefined; cur = cur[i]; }
+    else if (typeof cur === 'object') cur = cur[part];
+    else return undefined;
+  }
+  return cur;
+}
+
+async function checkData(inst) {
+  const o = merged(inst);
+  const roots = {
+    stats: '/admin/api/stats?instance=' + encodeURIComponent(inst),
+    active: '/admin/api/active',
+    config: '/admin/api/config/' + encodeURIComponent(inst),
+    instances: '/admin/api/instances'
+  };
+  const cache = {};
+  for (const [k, v] of Object.entries(roots)) cache[k] = await getJson(v);
+  const snap = {
+    stats: cache.stats, active: cache.active, config: cache.config, instances: cache.instances,
+    inst: inst, local: { note: 'APP 本地量，命令行无法取值' }
+  };
+  const rows = [];
+  for (const k of Object.keys(o)) {
+    if (/^ring_/.test(k) && o[k] && o[k].data) rows.push([k, o[k].data]);
+  }
+  // 旧格式: rings[].from
+  (o.rings || []).forEach((r, i) => { if (r.from) rows.push(['rings[' + i + ']', r.from]); });
+  if (o.bubble && o.bubble.data) rows.push(['bubble', o.bubble.data]);
+  if (o.content && o.content.data) rows.push(['content', o.content.data]);
+  if (!rows.length) { console.log('没有声明任何 data'); return; }
+
+  console.log('\n检查 ' + rows.length + ' 条 data（实例 ' + inst + '）\n');
+  for (const [where, spec] of rows) {
+    const [expr, div] = String(spec).split('/');
+    const denied = DENY.some(d => expr.startsWith(d));
+    if (denied) { console.log('  ' + where.padEnd(10) + spec.padEnd(34) + '拒绝：敏感路径'); continue; }
+    if (BUILTIN.includes(expr)) {
+      console.log('  ' + where.padEnd(10) + spec.padEnd(34) + '内置量（APP 侧计算）');
+      continue;
+    }
+    const v = pick(snap, expr);
+    if (v === undefined) { console.log('  ' + where.padEnd(10) + spec.padEnd(34) + '✗ 取不到（路径不存在）'); continue; }
+    let out = v;
+    if (div !== undefined) {
+      const d = BUILTIN.includes(div) ? undefined : pick(snap, div);
+      const dv = d !== undefined ? d : Number(div);
+      out = (dv && Number.isFinite(Number(v))) ? (Number(v) / Number(dv)) : undefined;
+      if (out === undefined) { console.log('  ' + where.padEnd(10) + spec.padEnd(34) + '✗ 除数取不到'); continue; }
+      out = Math.max(0, Math.min(1, out)).toFixed(3) + '  (比例)';
+    }
+    console.log('  ' + where.padEnd(10) + spec.padEnd(34) + '✓ ' + JSON.stringify(v) + (div !== undefined ? '  → ' + out : ''));
+  }
+  console.log('');
+}
+
+// ---------------- 交互模式 ----------------
+async function interactive() {
+  const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout });
+  const ask = q => new Promise(r => rl.question(q, a => r(a.trim())));
+  const inst = activeInstance();
+  for (;;) {
+    show(inst);
+    console.log('  1 改尺寸  2 改环粗细  3 改面板宽  4 改颜色  5 改环');
+    console.log('  6 改面板行  7 改按钮菜单  8 改手势  9 看全部可用键  0 退出');
+    console.log('  d 看数据  t 看触发方式  说明: ballctl get all / get ring / get when\n');
+    const c = await ask('选一个数字: ');
+    const o = readJson(fileFor(inst));
+    const save = () => { writeJson(fileFor(inst), o); console.log('  已写入，60 秒内生效（或长按球 → 刷新）'); };
+    if (c === '0' || c === '') { rl.close(); process.exit(0); }
+    else if (c === '1' || c === '2' || c === '3') {
+      const key = { 1: 'sizeDp', 2: 'gaugeWidth', 3: 'panelDp' }[c];
+      const spec = SCALARS[key];
+      const a = await ask('  ' + spec.desc + '（' + spec.range[0] + '..' + spec.range[1] + '，当前 ' + (o[key] === undefined ? '默认' : o[key]) + '，回车跳过）: ');
+      if (a) { o[key] = validateScalar(key, a); save(); }
+    } else if (c === '4') {
+      const a = await ask('  颜色 #RRGGBB（当前 ' + (o.gaugeColor || '默认') + '，回车跳过）: ');
+      if (a) { o.gaugeColor = validateScalar('gaugeColor', a); save(); }
+    } else if (c === '5') {
+      console.log('  例: ctxSoft:warn ctxHard:ok balance:danger 35/100:info');
+      const a = await ask('  环（回车跳过）: ');
+      if (a) { applySet(o, 'rings', a.split(/[\s,]+/).filter(Boolean)); save(); }
+    } else if (c === '6') {
+      console.log('  例: \'实例={{state.inst}}\' \'请求={{state.requests}}\'');
+      const a = await ask('  行，用 ; 分隔（回车跳过）: ');
+      if (a) { applySet(o, 'rows', a.split(';').map(x => x.trim()).filter(Boolean)); save(); }
+    } else if (c === '7') {
+      console.log('  例: 刷新=reload APP=open:overview 静音=mute:30');
+      const a = await ask('  菜单项，用 ; 分隔（回车跳过）: ');
+      if (a) { applySet(o, 'radial', a.split(';').map(x => x.trim()).filter(Boolean)); save(); }
+    } else if (c === '8') {
+      console.log('  例: tap=expand longPress=menu');
+      const a = await ask('  手势（回车跳过）: ');
+      if (a) { applySet(o, 'on', a.split(/[\s,]+/).filter(Boolean)); save(); }
+    } else if (c === '9') printAll(o);
+    else if (c === 'd') dataTree(inst);
+    else if (c === 't') printTouch(o);
+    else console.log('  没有这个选项');
+  }
+}
+
+// ---------------- 分发 ----------------
+let argv = process.argv.slice(2);
+let inst = activeInstance();
+if (argv[0] && instances().includes(argv[0])) inst = argv.shift();
+const cmd = argv.shift();
+const rest = argv;
+if (!cmd) { interactive(); return; }
+
+if (cmd === '-h' || cmd === '--help') {
+  const doc = /\/\*\*([\s\S]*?)\*\//.exec(fs.readFileSync(__filename, 'utf8'));
+  console.log(doc ? doc[1].replace(/^ \*/gm, '') : '见 --help');
+} else if (cmd === 'get') {
+  const o = merged(inst);
+  const first = rest[0];
+  const g = GROUP_ALIAS[first];
+  if (!first) {
+    console.log(JSON.stringify(readJson(fileFor(inst)), null, 1));
+  } else if (first === 'all') {
+    printAll(o);
+  } else if (first === 'data') {
+    dataTree(inst);
+  } else if (first === 'touch') {
+    printTouch(o);
+  } else if (g && !rest[1]) {
+    printGroup(g, o);
+  } else if (g) {
+    const hit = getItem(o, g, rest[1]);
+    console.log(hit ? JSON.stringify(hit.value, null, 1) : '（没有这一项）');
+  } else {
+    const v = o[first];
+    console.log(v === undefined ? '（未设置）' : (typeof v === 'object' ? JSON.stringify(v, null, 1) : String(v)));
+  }
+} else if (cmd === 'edit') {
+  const o = readJson(fileFor(inst));
+  const key = rest[0] || die('用法: edit <键|组> [项] <值>');
+  const eg = GROUP_ALIAS[key];
+  if (eg) {
+    const sel = rest[1] || die('用法: edit ' + key + ' <项> <值>');
+    const val = rest.slice(2).join(' ') || (rest[2] === undefined ? die('缺值') : rest[2]);
+    console.log('  → ' + applyEdit(o, eg, sel, val));
+  } else {
+    const val = rest.slice(1).join(' ');
+    if (!val) die('用法: edit ' + key + ' <值>');
+    o[key] = validateScalar(key, val);
+    console.log('  ' + key + ' = ' + JSON.stringify(o[key]));
+  }
+  writeJson(fileFor(inst), o);
+  console.log('  已写入，60 秒内生效');
+} else if (cmd === 'set') {
+  const o = readJson(fileFor(inst));
+  const raw = rest[0] || die('用法: set <组> 项 项 项');
+  const g = GROUP_ALIAS[raw] || die('不认识的组 ' + raw + '（ballctl get all 看有哪些）');
+  const items = rest.slice(1);
+  if (!items.length) die('至少给一项');
+  console.log('  → ' + applySet(o, g, items));
+  writeJson(fileFor(inst), o);
+  console.log('  已写入，60 秒内生效');
+} else if (cmd === 'rm') {
+  const o = readJson(fileFor(inst));
+  const key = rest[0] || die('用法: rm <键|组> <序号|名字>');
+  const g = GROUP_ALIAS[key];
+  const sel = rest[1];
+  if (g && g !== 'ringStyle' && g !== 'perform' && g !== 'bubble' && g !== 'noti') {
+    if (!sel) die('用法: rm ' + key + ' <序号|名字>');
+    if (g === 'when') {
+      const list = evRules(o);
+      const hit = list[Number(sel)] || list.find(x => x.key === sel || x.r.on === sel);
+      if (!hit) die('没有这一条（ballctl ev list）');
+      delete o[hit.key];
+      console.log('  已删除 ' + hit.key + '（' + hit.r.on + '）');
+    } else {
+      const pre = PREFIX[g];
+      const list = itemsNew(o, pre);
+      const hit = list[Number(sel)] || list.find(x =>
+        x.key === sel || (x.value.label || '') === sel || (x.value.on || '') === sel || (x.value.data || '') === sel);
+      if (!hit) die('没有这一项（ballctl get ' + g + '）');
+      delete o[hit.key];
+      itemsNew(o, pre).forEach((x, i) => { if (x.value && x.value.order !== undefined) x.value.order = i; });
+      console.log('  已删除 ' + hit.key);
+    }
+  } else if (g) {
+    die('这一组不支持 rm（用 edit / reset）');
+  } else {
+    delete o[key];
+    console.log('  deleted ' + key);
+  }
+  writeJson(fileFor(inst), o);
+} else if (cmd === 'url') {
+  let k = '';
+  try { k = fs.readFileSync(path.join(os.homedir(), '.ballkey'), 'utf8').trim(); } catch (_) {}
+  if (!k) die('Cannot read ~/.ballkey');
+  console.log('\n  The visual editor was removed; configure the floating ball via:');
+  console.log('    ballctl <inst> set <key=value>');
+  console.log('    ballctl <inst> look | stats | noti ...');
+  console.log('');
+} else if (cmd === 'noti') {
+  const o = readJson(fileFor(inst));
+  const text = rest.filter(a => !a.includes('=')).join(' ') || die("用法: ballctl noti '内容' [name=发送者 silence=1]");
+  const kv = {};
+  rest.filter(a => a.includes('=')).forEach(a => { const i = a.indexOf('='); kv[a.slice(0, i)] = a.slice(i + 1); });
+  const prev = o.noti || {};
+  const t = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const stamp = pad(t.getHours()) + ':' + pad(t.getMinutes()) + ':' + pad(t.getSeconds()) + '.' + String(t.getMilliseconds()).padStart(3, '0');
+  o.noti = {
+    name: kv.name || prev.name || '悬浮球',
+    text: text,
+    time: stamp,
+    silence: kv.silence === undefined ? (prev.silence === undefined ? 0 : prev.silence) : Number(kv.silence)
+  };
+  writeJson(fileFor(inst), o);
+  console.log('  noti: ' + JSON.stringify(o.noti));
+  evFire('noti', ['text=' + text, 'time=' + stamp, 'silence=' + o.noti.silence, 'title=' + o.noti.name]);
+} else if (cmd === 'chain') {
+  const o = readJson(fileFor(inst));
+  const sub = rest[0] || 'list';
+  if (sub === 'list') {
+    const list = itemsNew(o, 'chain');
+    if (!list.length) console.log('  （没有连锁）');
+    list.forEach((x, i) => console.log('  [' + i + '] on=' + x.value.on + '  动作×' + (x.value.do || []).length +
+      (x.value.delay ? '  间隔 ' + x.value.delay + 's' : '') + '   (' + x.key + ')'));
+  } else if (sub === 'add') {
+    const args = rest.slice(1);
+    const on = args.shift() || die('用法: chain add <事件名> <动作> [动作...] [lt= gt= eq= match= cd= delay= label=]');
+    const rule = { order: itemsNew(o, 'chain').length, on, cooldown: 30 };
+    const acts = [];
+    for (const a2 of args) {
+      let m;
+      if ((m = /^lt=(-?[\d.]+)$/.exec(a2))) rule.lt = Number(m[1]);
+      else if ((m = /^gt=(-?[\d.]+)$/.exec(a2))) rule.gt = Number(m[1]);
+      else if ((m = /^eq=(.+)$/.exec(a2))) rule.eq = m[1];
+      else if ((m = /^match=(.+)$/.exec(a2))) rule.match = m[1];
+      else if ((m = /^cd=(\d+)$/.exec(a2))) rule.cooldown = Number(m[1]);
+      else if ((m = /^delay=([\d.]+)$/.exec(a2))) rule.delay = Number(m[1]);
+      else if ((m = /^field=(\w+)$/.exec(a2))) rule.field = m[1];
+      else if ((m = /^label=(.+)$/.exec(a2))) rule.label = m[1];
+      else acts.push(evAction(a2.replace(/^it=/, '')));
+    }
+    if (!acts.length) die('至少给一个动作');
+    rule.do = acts;
+    if (!rule.label) rule.label = on;
+    const key = 'chain_' + rule.order;
+    o[key] = rule;
+    writeJson(fileFor(inst), o);
+    console.log('  ' + key + ': on=' + on + '  动作×' + acts.length + '  ' + JSON.stringify(rule.do));
+  } else if (sub === 'rm') {
+    const list = itemsNew(o, 'chain');
+    const hit = list[Number(rest[1])] || list.find(x => x.key === rest[1]);
+    if (!hit) die('没有这一条（ballctl chain list）');
+    delete o[hit.key];
+    writeJson(fileFor(inst), o);
+    console.log('  已删除 ' + hit.key);
+  } else die('chain 子命令: list | add | rm');
+} else if (cmd === 'ev') {
+  const o = readJson(fileFor(inst));
+  const sub = rest[0] || 'list';
+  const rules = evRules(o);
+  if (sub === 'list') {
+    if (!rules.length) console.log('  （没有事件规则）');
+    rules.forEach((x, i) => console.log('  [' + i + '] ' + evDesc(x.r) + '   (' + x.key + ')'));
+  } else if (sub === 'add') {
+    const args = rest.slice(1);
+    const on = args.shift() || die('用法: ev add <事件名> <动作> [lt= gt= eq= match= cd= field= label=]');
+    const rule = { order: rules.length ? Math.max(...rules.map(x => x.order)) + 1 : 0, on, cooldown: 30 };
+    let act = null;
+    for (const a2 of args) {
+      let m;
+      if ((m = /^lt=(-?[\d.]+)$/.exec(a2))) rule.lt = Number(m[1]);
+      else if ((m = /^gt=(-?[\d.]+)$/.exec(a2))) rule.gt = Number(m[1]);
+      else if ((m = /^eq=(.+)$/.exec(a2))) rule.eq = m[1];
+      else if ((m = /^match=(.+)$/.exec(a2))) rule.match = m[1];
+      else if ((m = /^cd=(\d+)$/.exec(a2))) rule.cooldown = Number(m[1]);
+      else if ((m = /^field=(\w+)$/.exec(a2))) rule.field = m[1];
+      else if ((m = /^label=(.+)$/.exec(a2))) rule.label = m[1];
+      else act = a2;
+    }
+    rule.do = evAction(act);
+    if (!rule.label) rule.label = on;
+    const key = evFreeKey(o);
+    o[key] = rule;
+    writeJson(fileFor(inst), o);
+    console.log('  ' + key + ': ' + evDesc(rule));
+    console.log('  已写入，60 秒内生效');
+  } else if (sub === 'rm') {
+    const i = Number(rest[1]);
+    const hit = rules[i] || rules.find(x => x.key === rest[1] || x.r.on === rest[1]);
+    if (!hit) die('没有这一条（先 ev list）');
+    delete o[hit.key];
+    writeJson(fileFor(inst), o);
+    console.log('  已删除 ' + hit.key + '（' + hit.r.on + '）');
+  } else if (sub === 'fire') {
+    evFire(rest[1] || die('用法: ev fire <事件名> [k=v ...]'), rest.slice(2));
+  } else if (sub === 'on' || sub === 'off') {
+    die('没有开关, 用 ev rm 删规则, 或 cd= 调冷却');
+  } else die('ev 子命令: list | add | rm | fire');
+} else if (cmd === 'reset' || cmd === 'clear') {
+  const p = fileFor(inst);
+  if (fs.existsSync(p)) { fs.unlinkSync(p); console.log('已删除 ' + p); } else console.log('没有 ' + p);
+} else if (cmd === 'check') {
+  const what = rest[0];
+  if (what !== 'data') die('用法: check data');
+  checkData(inst);
+} else if (cmd === 'show') {
+  show(inst);
+} else if (cmd === 'diff') {
+  const g = readJson(fileFor('global'));
+  const o = readJson(fileFor(inst));
+  const keys = new Set([...Object.keys(g), ...Object.keys(o)]);
+  let n = 0;
+  for (const k of keys) {
+    const a = JSON.stringify(g[k]), b = JSON.stringify(o[k]);
+    if (a !== b) { console.log('  ' + k + ': 全局=' + (a || '—') + '  本实例=' + (b || '—')); n++; }
+  }
+  if (!n) console.log('  本实例没有覆盖任何键');
+} else if (cmd === 'watch') {
+  let last = null;
+  console.log('盯着 ' + inst + '（Ctrl-C 退出）');
+  setInterval(() => api(inst, (e, j) => {
+    if (e) { console.log('拉取失败: ' + e.message); return; }
+    if (j.hash !== last) { last = j.hash; console.log(new Date().toLocaleTimeString() + '  hash=' + j.hash + '  keys=' + Object.keys(j.look || {}).join(',')); }
+  }), 2000);
+} else if (cmd === 'ui') {
+  const sub = rest[0];
+  const UIDIR = path.join(DIR, 'ui');
+  if (sub === 'list') {
+    (fs.existsSync(UIDIR) ? fs.readdirSync(UIDIR).filter(x => x.endsWith('.json')) : []).forEach(x => {
+      console.log(x.replace(/\.json$/, '') + '\t' + fs.statSync(path.join(UIDIR, x)).size + 'B');
+    });
+  } else if (sub === 'get') {
+    const n = rest[1] || die('用法: ui get <name>');
+    console.log(fs.readFileSync(path.join(UIDIR, n + '.json'), 'utf8'));
+  } else if (sub === 'set') {
+    const n = rest[1] || die('用法: ui set <name> <file|->');
+    if (!/^[a-z0-9_-]{1,32}$/.test(n)) die('名字只能 [a-z0-9_-]{1,32}');
+    const src = (!rest[2] || rest[2] === '-') ? fs.readFileSync(0, 'utf8') : fs.readFileSync(rest[2], 'utf8');
+    JSON.parse(src);
+    fs.writeFileSync(path.join(UIDIR, n + '.json'), src);
+    console.log('已写入 ui/' + n + '.json (' + src.length + 'B)');
+  } else if (sub === 'del') {
+    const n = rest[1] || die('用法: ui del <name>');
+    fs.unlinkSync(path.join(UIDIR, n + '.json'));
+    console.log('已删除 ui/' + n + '.json');
+  } else die('ui 子命令: list | get | set | del');
+} else {
+  die('未知命令 ' + cmd + '（ballctl --help 或直接 ballctl 进交互）');
+}

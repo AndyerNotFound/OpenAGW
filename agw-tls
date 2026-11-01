@@ -1,0 +1,347 @@
+#!/usr/bin/env bash
+# agw-tls — the single entry for ai-gateway encrypted access. Forget the details? Use this.
+#   agw-tls            see whether it works
+#   agw-tls use        print ready-to-run client code
+#   agw-tls trust      prepare certs to Download and show where to tap on the phone
+#   agw-tls check      self-check; tells you how to fix it
+#   agw-tls setup      one-click enable (cert + port + restart + verify)
+#   agw-tls newkey     rotate the gateway key
+#   agw-tls off        disable encryption, back to http
+set -uo pipefail
+# Allow symlink invocation ($PREFIX/bin/agw-tls)
+SELF="$0"
+case "$SELF" in */*) ;; *) SELF="$(command -v "$SELF" 2>/dev/null || echo "$SELF")" ;; esac
+SELF="$(readlink -f "$SELF" 2>/dev/null || echo "$SELF")"
+DIR="$(cd "$(dirname "$SELF")" && pwd)"
+export PATH="$PATH:/data/data/com.termux/files/usr/bin"
+CA="$DIR/tls/ca.pem"
+SRVCERT="$DIR/data/cert.pem"
+EXPORTDIR="/sdcard/Download/ai-gateway"
+CRT="$EXPORTDIR/ai-gateway-ca.crt"
+CRT_SRV="$EXPORTDIR/ai-gateway-cert.crt"
+KEYFILE="$DIR/data/.current-key-default"
+
+ip4() {
+  ifconfig 2>/dev/null | awk '/^[a-zA-Z0-9_.-]+:/{ifn=$1;sub(":","",ifn)} /inet /{print ifn,$2}' \
+    | grep -vE ' 127\.' | awk '{print ($1 ~ /^(wlan|eth|ap|swlan)/ ? 0 : 1), $2}' | sort | awk 'NR==1{print $2}'
+}
+cfg() {
+  node -e '
+    const fs=require("fs"),path=require("path");
+    const D=process.argv[1],w=process.argv[2];
+    try{
+      const c=require(path.join(D,"crypt.js"));
+      let r=fs.readFileSync(path.join(D,"config.json"),"utf8");
+      if(c.isEncText(r))r=c.decryptText(r,c.loadPass());
+      const j=JSON.parse(r), t=j.tls||(j.listen&&j.listen.tls)||{};
+      const hp=(j.listen||{}).port||16384;
+      const o={httpport:hp, enabled:!!t.enable,
+               httpsport:t.enable?hp:null,
+               gwkey:j.gatewayKey||""};
+      const v=o[w];
+      process.stdout.write(v===undefined||v===null?"":String(v));
+    }catch(e){process.stdout.write("")}
+  ' "$DIR" "$1"
+}
+curkey() { if [ -f "$KEYFILE" ]; then cat "$KEYFILE"; else cfg gwkey; fi; }
+mask() { local k="$1"; if [ ${#k} -gt 10 ]; then echo "${k:0:6}…${k: -4}"; else echo "${k:-(unset)}"; fi; }
+stat_inst() {
+  node -e '
+    const fs=require("fs"),path=require("path");
+    const D=process.argv[1]; const c=require(path.join(D,"crypt.js"));
+    const files=fs.readdirSync(D).filter(f=>/^config(\..+)?\.json$/.test(f));
+    let on=0,tot=0,mainOn=false;
+    for(const f of files){
+      let r=fs.readFileSync(path.join(D,f),"utf8");
+      if(c.isEncText(r))r=c.decryptText(r,c.loadPass());
+      const j=JSON.parse(r), t=j.tls||(j.listen&&j.listen.tls)||{};
+      tot++; if(t.enable){on++; if(f==="config.json")mainOn=true;}
+    }
+    process.stdout.write(on+" / "+tot+" with TLS on"+(on&&mainOn?" (main port https; other instances via /<instance>/ prefix)":(on?" (⚠ main instance has TLS off, TLS instances unreachable)":"")));
+  ' "$DIR"
+}
+
+days_left() {
+  local end; end="$(openssl x509 -in "$DIR/data/cert.pem" -noout -enddate 2>/dev/null | cut -d= -f2)"
+  [ -z "$end" ] && { echo "?"; return; }
+  local s; s="$(date -d "$end" +%s 2>/dev/null || echo 0)"
+  [ "$s" = "0" ] && { echo "?"; return; }
+  echo $(( (s - $(date +%s)) / 86400 ))
+}
+line() { printf '%s\n' "────────────────────────────────────────────────"; }
+
+status() {
+  local ip hp sp en; ip="$(ip4)"; hp="$(cfg httpport)"; sp="$(cfg httpsport)"; en="$(cfg enabled)"
+  line; echo " ai-gateway encrypted access"; line
+  if [ "$en" = "true" ] && [ -n "$sp" ]; then
+    echo "  Status   ✅ TLS on (single port: https only, no plaintext entry)"
+    echo "  Use      https://${ip}:${sp}/v1"
+    echo "          devices on the same network use this address"
+  else
+    echo "  Status   ⛔ TLS off (currently plaintext http only)"
+    echo "  Use      http://${ip}:${hp}/v1"
+    echo "          want TLS: agw-tls setup"
+  fi
+  echo "  Key      $(mask "$(curkey)")    view: cat $KEYFILE"
+  echo "  Cert     $(days_left) days left (auto-renewed, nothing to do)"
+  echo "  Instances $(stat_inst), enable all: agw-tls all"
+  echo "  Export   $EXPORTDIR  (agw-tls export)"
+  if [ -f "$CRT" ]; then
+    echo "          (exported; $(bash "$DIR/tls/cleanup.sh" list 2>/dev/null | grep -c 'deleted after') delete jobs queued)"
+  else
+    echo "          (not exported; install certs: agw-tls export)"
+  fi
+  line
+  echo "  Next     agw-tls use    print client code | agw-tls check  self-check"
+  line
+}
+
+use_() {
+  local ip sp key; ip="$(ip4)"; sp="$(cfg httpsport)"; key="$(curkey)"
+  [ -z "$sp" ] && { echo "TLS is off: run agw-tls setup first"; exit 1; }
+  local url="https://${ip}:${sp}/v1"
+  line; echo " Copy any snippet below and it works (address ${url})"; line
+  cat <<TXT
+【Python on computer】
+1. Copy $CRT from the phone to the computer, e.g. /Users/you/certs/ai-gateway-ca.crt
+2. Install: pip install openai
+3. Run this:
+
+    import httpx
+    from openai import OpenAI
+
+    client = OpenAI(
+        base_url="${url}",
+        api_key="${key}",
+        http_client=httpx.Client(verify="/Users/you/certs/ai-gateway-ca.crt"),
+    )
+    print(client.models.list())
+
+【Node.js on computer】
+1. Copy the same cert file
+2. Start with the cert path:
+
+    NODE_EXTRA_CA_CERTS=/Users/you/certs/ai-gateway-ca.crt node your-app.js
+
+   In code:
+    const client = new OpenAI({ baseURL: "${url}", apiKey: "${key}" });
+
+【Mobile app (Chatbox / LobeChat etc.)】
+   Base URL: ${url}
+   API Key: ${key}
+   Can't connect? Run agw-tls trust to install the cert
+
+【Try it in the terminal】
+   curl --cacert $CA "${url}/models" -H "Authorization: Bearer ${key}"
+TXT
+  line
+  echo "  Keys rotate every 90 days; old keys have a 14-day grace period."
+  echo "        After rotating, re-run agw-tls use."
+  line
+}
+
+# Parse --keep <minutes> into KEEPARG (no `local` here: these run at top level inside the case block)
+keeparg_() {
+  local def="$1"; shift
+  KEEPARG="$def"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --keep)   KEEPARG="${2:-$def}"; shift 2 ;;
+      --keep=*) KEEPARG="${1#--keep=}"; shift ;;
+      *)        shift ;;
+    esac
+  done
+  case "$KEEPARG" in ''|*[!0-9.]*) KEEPARG="$def" ;; esac
+}
+
+clean_() {
+  local f n=0
+  # also sweep the legacy .pem names from older versions
+  for f in "$CRT" "$CRT_SRV" "$EXPORTDIR/ai-gateway-cert.pem" "$EXPORTDIR/README.txt"; do
+    if [ -e "$f" ]; then rm -f "$f" && n=$((n+1)); fi
+    bash "$DIR/tls/cleanup.sh" cancel "$f" >/dev/null 2>&1
+  done
+  rmdir "$EXPORTDIR" 2>/dev/null
+  echo "✅ Deleted $n exported files (dir $EXPORTDIR)"
+  bash "$DIR/tls/cleanup.sh" sweep >/dev/null 2>&1
+  bash "$DIR/tls/cleanup.sh" list
+}
+
+# Export the certificates to shared storage. The private key (data/key.pem) is deliberately NOT exported.
+export_() {
+  local KEEP="${1:-30}"
+  case "$KEEP" in ''|*[!0-9.]*) KEEP=30 ;; esac
+  [ -f "$CA" ] || { echo "✗ CA cert not found: $CA (run agw-tls setup first)"; return 1; }
+  mkdir -p "$EXPORTDIR" 2>/dev/null
+  if ! cp -f "$CA" "$CRT" 2>/dev/null; then
+    echo "✗ Cannot write to $EXPORTDIR (run termux-setup-storage and reopen Termux)"; return 1
+  fi
+  local got="$CRT"
+  if [ -f "$SRVCERT" ]; then
+    cp -f "$SRVCERT" "$CRT_SRV" 2>/dev/null && got="$got
+             $CRT_SRV"
+  fi
+  cat > "$EXPORTDIR/README.txt" 2>/dev/null <<'TXT'
+ai-gateway certificates
+
+ai-gateway-ca.crt    private CA cert — install this on devices/computers once (no reinstall on IP change/renewal)
+ai-gateway-cert.crt  server cert (for viewing only; clients usually don't need it)
+Private key.pem is NOT exported: it stays in the gateway dir; copying it to a public dir would hand over your identity
+
+Android: Settings → Security & privacy → More security settings → Encryption & credentials → Install a certificate → CA certificate → pick ai-gateway-ca.crt
+iPhone/iPad: Settings → General → VPN & Device Management → Install, then About → Certificate Trust Settings → enable full trust
+Windows: double-click → Install Certificate → Local Machine → Trusted Root Certification Authorities
+macOS: double-click → Keychain Access → the cert → Trust → Always Trust
+
+After installing, open the gateway address in a mobile browser; no red warning in the address bar = success
+TXT
+  local f
+  if [ "$KEEP" != "0" ]; then
+    for f in "$CRT" "$CRT_SRV" "$EXPORTDIR/README.txt"; do
+      [ -f "$f" ] && bash "$DIR/tls/cleanup.sh" add "$f" "$KEEP" >/dev/null 2>&1
+    done
+  fi
+  line; echo "  Certificates exported to: $EXPORTDIR"; line
+  printf '  %s\n' $got
+  [ -f "$EXPORTDIR/README.txt" ] && echo "  $EXPORTDIR/README.txt  (install steps)"
+  line
+  if [ "$KEEP" != "0" ]; then
+    echo " ⏳ auto-deleted after ${KEEP} minutes (avoids lingering in a public dir)"
+    echo "    keep longer: agw-tls export --keep 120   forever: --keep 0   delete now: agw-tls clean"
+  fi
+}
+
+trust_() {
+  local KEEP=5
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --keep)   KEEP="${2:-5}"; shift 2 ;;
+      --keep=*) KEEP="${1#--keep=}"; shift ;;
+      *)        shift ;;
+    esac
+  done
+  case "$KEEP" in ''|*[!0-9.]*) KEEP=5 ;; esac
+  export_ "$KEEP" || exit 1
+  cat <<'TXT'
+Install once (no reinstall after IP changes or cert renewal):
+
+Phone (Android)
+  Settings → Security & privacy → More security settings → Encryption & credentials → Install a certificate → CA certificate
+  → Install anyway → pick ai-gateway-ca.crt → on "your data may be monitored", confirm
+
+iPhone / iPad
+  Transfer the file to the phone → Settings → General → VPN & Device Management → Install
+  → then Settings → General → About → Certificate Trust Settings → enable full trust
+
+Windows
+  Double-click the file → Install Certificate → Local Machine → Next → place the cert in "Trusted Root Certification Authorities"
+
+macOS
+  Double-click the file → find it in Keychain Access → double-click → Trust → set "When using this certificate" to "Always Trust"
+
+Verify: open https://<address above without /v1>/health in mobile Chrome
+         no red warning in the address bar = success
+TXT
+}
+
+check_() {
+  local ip sp hp ok=0
+  ip="$(ip4)"; sp="$(cfg httpsport)"; hp="$(cfg httpport)"
+  line; echo " Self-check"; line
+  echo -n " 1. Is the gateway running?  "
+  if { [ -n "$sp" ] && curl -sf -m 5 --cacert "$CA" "https://127.0.0.1:${sp}/health" >/dev/null 2>&1; } \
+     || curl -sf -m 5 "http://127.0.0.1:${hp}/health" >/dev/null 2>&1; then
+    echo "✅ yes"
+  else
+    echo "❌ not running → agw.sh start"; ok=1
+  fi
+  echo -n " 2. Is TLS on?          "
+  if [ -n "$sp" ]; then echo "✅ yes, port $sp"; else echo "❌ off → agw-tls setup"; ok=1; fi
+  echo -n " 3. Does the cert verify? "
+  if [ -n "$sp" ] && curl -sf -m 8 --cacert "$CA" "https://127.0.0.1:${sp}/health" >/dev/null 2>&1; then
+    echo "✅ yes (cert valid for $(days_left) days)"
+  else
+    echo "❌ verify failed → agw-tls setup"; ok=1
+  fi
+  echo -n " 4. Is this IP in the cert? "
+  if openssl x509 -in "$SRVCERT" -noout -ext subjectAltName 2>/dev/null | grep -q "IP Address:${ip}"; then
+    echo "✅ yes ($ip)"
+  else
+    echo "❌ not in cert → agw-tls setup"; ok=1
+  fi
+  echo -n " 5. Does the key work?  "
+  local k; k="$(curkey)"
+  if [ -n "$k" ] && [ -n "$sp" ] && \
+     [ "$(curl -s -o /dev/null -w '%{http_code}' -m 8 --cacert "$CA" -H "Authorization: Bearer $k" "https://127.0.0.1:${sp}/v1/models")" = "200" ]; then
+    echo "✅ yes"
+  else
+    echo "❌ no → agw-tls newkey"
+    ok=1
+  fi
+  line
+  if [ "$ok" = "0" ]; then
+    echo "  All good: other devices use https://${ip}:${sp}/v1"
+  else
+    echo "  Failures: run agw-tls setup, then agw-tls check"
+  fi
+  line
+}
+
+setup_() {
+  local ip sp
+  ip="$(ip4)"
+  echo "① Preparing certificates…"
+  bash "$DIR/tls/gen-ca.sh" >/dev/null 2>&1
+  bash "$DIR/tls/gen-server.sh" >/dev/null 2>&1 || { echo "✗ Certificate generation failed"; exit 1; }
+  sp="$(cfg httpport)"
+  echo "   Port $sp (https only once enabled; no plaintext entry)"
+  echo "③ Enabling TLS…"
+  node "$DIR/tls/apply-tls.js" default >/dev/null 2>&1 || { echo "✗ Config write failed"; exit 1; }
+  echo "④ Restarting gateway…"
+  bash "$DIR/agw.sh" restart >/dev/null 2>&1
+  sleep 3
+  echo "⑤ Verifying…"
+  if curl -sf -m 8 --cacert "$CA" "https://127.0.0.1:${sp}/health" >/dev/null 2>&1; then
+    echo "✅ Success"
+  else
+    echo "✗ Verification failed; run agw-tls check to see which step broke"; exit 1
+  fi
+  echo "⑥ Copying certs to Download…"
+  cp -f "$CA" "$CRT" 2>/dev/null && echo "   $CRT" || echo "   Cannot copy: run termux-setup-storage first"
+  line
+  echo "  Computers/phones use: https://${ip}:${sp}/v1"
+  echo "  Key: $(mask "$(curkey)")   view: cat $KEYFILE"
+  line
+  echo "  Next: agw-tls trust (install on devices) | agw-tls use (ready code)"
+  line
+}
+
+case "${1:-}" in
+  ""|status) status ;;
+  use|code)  use_ ;;
+  trust|ca)  shift; trust_ "$@" ;;
+  export|out)
+             shift
+             keeparg_ 30 "$@"
+             export_ "$KEEPARG" ;;
+  check|test) check_ ;;
+  setup|on)  setup_ ;;
+  newkey)    bash "$DIR/ops/guard.sh" >/dev/null 2>&1; node "$DIR/ops/rotate-keys.js" --now --yes ;;
+  all)       shift; node "$DIR/tls/batch-tls.js" "$@" ;;
+  all-off)   node "$DIR/tls/batch-tls.js" --off ;;
+  clean)     clean_ ;;
+  pending)   bash "$DIR/tls/cleanup.sh" list ;;
+  off)       node "$DIR/tls/apply-tls.js" default --off >/dev/null 2>&1 && bash "$DIR/agw.sh" restart >/dev/null 2>&1 && echo "✅ TLS disabled, back to http://$(ip4):$(cfg httpport)/v1" ;;
+  fix)       bash "$DIR/ops/guard.sh"; bash "$DIR/agw.sh" restart >/dev/null 2>&1; sleep 3; check_ ;;
+  *)         echo "Usage: agw-tls <command>   [no args = status]"
+             echo "  status   show status"
+             echo "  use      print ready-to-run client code"
+             echo "  export   export certs to /sdcard/Download/ai-gateway [--keep minutes, default 30]"
+             echo "  trust    export certs + print install steps [--keep minutes, default 5]"
+             echo "  check    self-check"
+             echo "  setup    one-click enable TLS"
+             echo "  newkey   rotate the gateway key"
+             echo "  off      disable TLS"
+             echo "  clean    delete exported certs"
+             echo "  all      enable/disable for all instances: all [--off|--dry-run|--only <instance>]" ;;
+esac

@@ -1,0 +1,10 @@
+Package: ai-gateway
+Version: 1.4.8-1
+Architecture: all
+Depends: nodejs (>= 18)
+Installed-Size: 13330
+Maintainer: AndyerNotFound <andyer@users.noreply.github.com>
+Homepage: https://github.com/AndyerNotFound/ai-gateway-AI
+Description: Local-first AI gateway (OpenAI/Gemini/Claude format conversion)
+ Multi-instance pool, AGWENC1 encrypted configs, TLS, i18n CLI.
+  Runtime data in /var/lib/ai-gateway (AGWENC1 encrypted; .agwkey auto-generated). Panels: /admin on port 16384.

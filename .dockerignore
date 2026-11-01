@@ -1,0 +1,14 @@
+# 敏感与本地文件不入镜像
+config*.json
+.agwkey
+*.pem
+log/
+.run/
+.bak*/
+*.bak-*
+backups/
+patch*.py
+.git/
+node_modules/
+Dockerfile
+docker-compose.yml

@@ -1,0 +1,16 @@
+#!/bin/bash
+set -e
+DATADIR=/var/lib/ai-gateway
+mkdir -p "$DATADIR" && chmod 700 "$DATADIR"
+if [ ! -f "$DATADIR/.agwkey" ]; then
+  install -m 600 /dev/null "$DATADIR/.agwkey"
+  head -c 48 /dev/urandom | base64 | tr -d "\n" > "$DATADIR/.agwkey"
+fi
+if [ ! -f "$DATADIR/config.json" ]; then
+  install -m 600 /opt/ai-gateway/config.default.json "$DATADIR/config.json"
+  echo "ai-gateway: first install, default config installed (edit apiKey in /var/lib/ai-gateway/config.json)"
+fi
+ln -sfn "$DATADIR" /opt/ai-gateway/data
+systemctl daemon-reload 2>/dev/null || true
+systemctl enable ai-gateway.service 2>/dev/null || true
+if [ -f /etc/systemd/system/ai-gateway.service ]; then systemctl restart ai-gateway 2>/dev/null || true; fi

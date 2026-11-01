@@ -1,0 +1,75 @@
+{
+ "gcui": 1,
+ "title": "提供商",
+ "data": {
+  "config": {},
+  "instances": {}
+ },
+ "root": {
+  "type": "column",
+  "gap": 12,
+  "children": [
+   {
+    "type": "row",
+    "gap": 8,
+    "children": [
+     {
+      "type": "text",
+      "text": "{{state.inst}} · 渠道",
+      "style": "title",
+      "weight": 1
+     },
+     {
+      "type": "button",
+      "text": "刷新",
+      "style": "tonal",
+      "action": {
+       "type": "reload"
+      }
+     }
+    ]
+   },
+   {
+    "type": "table",
+    "rows": "{{state.config.channels}}",
+    "gap": 8,
+    "empty": "这个实例还没有渠道",
+    "columns": [
+     {
+      "key": "name",
+      "label": "渠道",
+      "weight": 3
+     },
+     {
+      "key": "type",
+      "label": "类型",
+      "weight": 2
+     },
+     {
+      "key": "hasKey",
+      "label": "密钥",
+      "weight": 1,
+      "toneMap": {
+       "true": "ok",
+       "false": "danger"
+      }
+     },
+     {
+      "key": "default",
+      "label": "默认",
+      "weight": 1,
+      "toneMap": {
+       "true": "info",
+       "false": "muted"
+      }
+     }
+    ]
+   },
+   {
+    "type": "text",
+    "text": "点上面「刷新」重读；改渠道仍走原生页",
+    "style": "caption"
+   }
+  ]
+ }
+}

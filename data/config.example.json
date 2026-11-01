@@ -1,0 +1,21 @@
+{
+  "listen": { "host": "0.0.0.0", "port": 16384 },
+  "gatewayKey": "",
+  "maxBodyBytes": 67108864,
+  "connectTimeout": 15000,
+  "responseTimeout": 180000,
+  "proxies": {},
+  "panel": { "openBrowser": true },
+  "redact": { "enable": true, "response": false, "extra": [] },
+  "channels": [
+    {
+      "name": "my-provider",
+      "type": "openai",
+      "baseUrl": "https://api.deepseek.com",
+      "path": "",
+      "apiKey": "sk-REPLACE-ME",
+      "models": ["deepseek-chat", "deepseek-reasoner"],
+      "default": true
+    }
+  ]
+}
