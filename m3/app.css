@@ -115,7 +115,11 @@ otherwise the whole body{background:var(--md-sys-color-surface-dim)} declaration
 html{-webkit-tap-highlight-color:transparent}
 body{
   font-family:system-ui,-apple-system,'Segoe UI',Roboto,'Noto Sans SC',sans-serif;
-  background:var(--md-sys-color-surface-dim); color:var(--md-sys-color-on-surface);
+  background:linear-gradient(160deg,
+      color-mix(in srgb, var(--md-sys-color-primary-container) 16%, var(--md-sys-color-surface-dim)),
+      var(--md-sys-color-surface-dim) 45%,
+      color-mix(in srgb, var(--md-sys-color-tertiary-container) 12%, var(--md-sys-color-surface-dim)));
+  color:var(--md-sys-color-on-surface);
   font-size:11px; line-height:1.5; height:100dvh;
   display:flex; position:fixed; inset:0; overflow:hidden;
 }
@@ -188,7 +192,8 @@ body{
 /* Scrim: dims everything outside the rail while it is expanded; a tap collapses the rail again */
 .rail-scrim{position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.38);opacity:0;pointer-events:none;
   transition:opacity .3s cubic-bezier(.2,0,0,1)}
-.rail-scrim.show{opacity:1;pointer-events:auto}
+.rail-scrim.show{opacity:1;pointer-events:auto;
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
 
 /* ============ Main area ============ */
 /* The main view is pushed, not squeezed: its width stays (viewport - collapsed rail) and the whole
@@ -330,8 +335,13 @@ table.tbl{width:100%;table-layout:fixed;border-collapse:collapse;font-size:10px}
 .card-head{display:flex;align-items:center;justify-content:space-between;gap:4px 8px;flex-wrap:wrap;margin-bottom:4px}
 .card-title{font-size:13px;font-weight:500}
 .card-sub{font-size:10px;color:var(--md-sys-color-on-surface-variant)}
-md-filled-card{background:var(--md-sys-color-surface-container);border-radius:var(--md-sys-shape-corner-large);
-  padding:14px;margin-bottom:4px;display:block}
+/* Glass cards: translucent container over the body's tint gradient + backdrop blur.
+   Uses color-mix (Chrome 111+); on older cores the fallback below keeps a translucent flat color. */
+md-filled-card{
+  background:color-mix(in srgb, var(--md-sys-color-surface-container) 72%, transparent);
+  border-radius:var(--md-sys-shape-corner-large);
+  padding:14px;margin-bottom:4px;display:block;
+  backdrop-filter:blur(16px) saturate(1.3);-webkit-backdrop-filter:blur(16px) saturate(1.3)}
 .list-gap{display:flex;flex-direction:column;gap:4px}
 /* Overview horizontal carousels (instance cards + stat boxes): one page = the fully visible items;
    the ovCar* helpers in app.js advance one page per tick. Instance cards: 3 per page on wide
@@ -347,9 +357,6 @@ md-filled-card{background:var(--md-sys-color-surface-container);border-radius:va
 
 /* About card: gateway name (custom brand) + a one-glance summary */
 .about{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}
-.about .logo{width:34px;height:34px;border-radius:10px;background:var(--md-sys-color-primary-container);
-  color:var(--md-sys-color-on-primary-container);display:grid;place-items:center;flex:none}
-.about .logo .msym{font-size:18px}
 .about-txt{flex:none;min-width:0}
 .about-name{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .about-ver{font-size:10px;color:var(--md-sys-color-on-surface-variant);margin-top:1px}
