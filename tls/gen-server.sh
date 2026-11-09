@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Issue the ai-gateway server certificate with the local CA.
-#   bash gen-server.sh            generate/update cert.pem + key.pem (SAN automatically includes all non-loopback IPv4 addresses)
+#   bash gen-server.sh            generate/update cert.pem + key.pem (SAN = non-loopback IPv4 addresses + <mdns.name>.local)
 #   bash gen-server.sh --ensure   re-sign only when expired / not issued by this CA / SAN missing current IP (good for cron)
 #   bash gen-server.sh --force    re-sign unconditionally
 #   EXTRA_SAN="DNS:agw.local"     append extra SANs
@@ -26,12 +26,24 @@ detect_if_ip() {
 detect_ips() { detect_if_ip | awk '{print $2}' | sort -u; }
 
 build_san() {
-  local s="DNS:localhost,IP:127.0.0.1,IP:::1" ip
+  local s="DNS:localhost,DNS:${MDNS_HOST}.local,IP:127.0.0.1,IP:::1" ip
   for ip in $(detect_ips); do s="$s,IP:$ip"; done
   [ -n "$EXTRA_SAN" ] && s="$s,$EXTRA_SAN"
   printf '%s' "$s"
 }
 
+# The mDNS LAN name must be in the SAN, otherwise https://<name>.local fails hostname verification
+MDNS_HOST="$(node -e '
+  const fs=require("fs"),path=require("path");
+  const f=process.argv[1],root=process.argv[2];
+  try{
+    const m=require(path.join(root,"mdns.js"));
+    let raw=fs.readFileSync(f,"utf8");
+    try{const c=require(path.join(root,"crypt.js"));if(c.isEncText(raw))raw=c.decryptText(raw,c.loadPass());}catch(_){}
+    process.stdout.write(m.sanitizeName((JSON.parse(raw).mdns||{}).name)||"openagw");
+  }catch(_){process.stdout.write("openagw");}
+' "$ROOT/data/config.json" "$ROOT" 2>/dev/null)"
+[ -n "$MDNS_HOST" ] || MDNS_HOST=openagw
 SAN="$(build_san)"
 NEED=1
 
@@ -41,6 +53,7 @@ if [ "$MODE" != "--force" ] && [ -f "$OUT_CERT" ] && [ -f "$OUT_KEY" ]; then
     CUR="$(openssl x509 -in "$OUT_CERT" -noout -ext subjectAltName 2>/dev/null | tr -d ' \n')"
     OK=1
     case "$CUR" in *"DNS:localhost"*) ;; *) OK=0 ;; esac
+    case "$CUR" in *"DNS:${MDNS_HOST}.local"*) ;; *) OK=0 ;; esac
     for ip in $(detect_ips); do
       case "$CUR" in *"IPAddress:$ip"*) ;; *) OK=0 ;; esac
     done
@@ -49,7 +62,7 @@ if [ "$MODE" != "--force" ] && [ -f "$OUT_CERT" ] && [ -f "$OUT_KEY" ]; then
 fi
 
 if [ "$NEED" = "0" ]; then
-  echo "✓ Cert is valid and covers all current IPs; no re-sign needed"
+  echo "✓ Cert is valid and covers all current IPs + ${MDNS_HOST}.local; no re-sign needed"
   openssl x509 -in "$OUT_CERT" -noout -subject -enddate -ext subjectAltName
   exit 0
 fi

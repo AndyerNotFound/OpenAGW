@@ -171,6 +171,14 @@ function poolReconcilePorts(pool) {
   }
   pool.portOwner = new Map();
   for (const dd of desired.values()) pool.portOwner.set(dd.port, dd.name);
+// mDNS follows the main port; only the default instance carries the setting
+  if (pool.mainPort) {
+    try {
+      const def = pool.instances.get('default');
+      const m = (def && def.mdns) || {};
+      require('./mdns').apply({ enable: !!m.enable, name: m.name, port: pool.mainPort, tls: !!pool.mainTlsPort });
+    } catch (e) { logErr('[mdns] 启动失败: ' + e.message); }
+  }
 }
 
 function poolHandler(req, res) {

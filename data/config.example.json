@@ -6,6 +6,7 @@
   "responseTimeout": 180000,
   "proxies": {},
   "panel": { "openBrowser": true },
+  "mdns": { "enable": false, "name": "openagw" },
   "redact": { "enable": true, "response": false, "extra": [] },
   "channels": [
     {

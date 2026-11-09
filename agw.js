@@ -14,6 +14,7 @@ const { spawn, execSync } = require('child_process');
 const crypt = require(path.join(__dirname, 'crypt.js'));
 const panelAuth = require(path.join(__dirname, 'panel-auth.js'));
 const { utf8 } = require(path.join(__dirname, 'util.js'));
+const mdnsMod = require(path.join(__dirname, 'mdns.js'));
 
 const DIR = __dirname; // code root
 const DATA_DIR = path.join(__dirname, 'data'); // data root: config*/ball*/.agwkey/log etc.
@@ -623,6 +624,58 @@ function cmdCloudflared(argv) {
     if (act === 'start') return new Promise(r => setTimeout(r, 2500)).then(get).then(d => ok('Tunnel started: ' + (d.url || '(getting domain, later: status)')));
     ok('Tunnel stopped');
   }).catch(e => die(e.message));
+}
+
+/* ================================================================
+ *  agw mdns
+ * ================================================================ */
+function gwAlive() {
+  try {
+    const pid = Number(fs.readFileSync(path.join(DATA_DIR, '.run', 'main.pid'), 'utf8').trim());
+    if (!pid) return false;
+    process.kill(pid, 0);
+    return true;
+  } catch (_) { return false; }
+}
+function mdnsStatus() {
+  const c = loadCfg('default');
+  const m = c.mdns || {};
+  const ask = gwAlive() ? api('GET', '/admin/api/mdns').catch(() => null) : Promise.resolve(null);
+  return ask.then(d => {
+    const name = (d && d.name) || m.name || 'openagw';
+    const host = (d && d.host) || (mdnsMod.sanitizeName(name) || 'openagw') + '.local';
+    const port = (c.listen || {}).port || 16384;
+    const scheme = (c.tls && c.tls.enable) ? 'https' : 'http';
+    const state = d ? (d.state === 'ok' ? C.grn('on') : (d.state === 'probing' ? C.yel('probing') : C.dim(d.state))) : C.dim(m.enable ? '未运行' : 'off');
+    console.log(`  mDNS    ${state}   ${scheme}://${host}:${port}/v1${m.enable ? '' : C.dim('   (未广播)')}`);
+    if (d && d.instance) console.log(`  服务    ${d.instance}`);
+    if (d && d.ips && d.ips.length) console.log(`  地址    ${d.ips.join(', ')}`);
+    if (d && d.conflicts) console.log(C.yel(`  冲突    ${d.conflicts} 次(已自动改名)`));
+    if (!m.enable) console.log(C.dim('  开启: agw mdns on    改名: agw mdns name <名字>'));
+    else if (c.tls && c.tls.enable) console.log(C.dim('  TLS 已开启: 证书 SAN 须含 DNS:' + host + ', 改名后运行 agw refresh ca'));
+  });
+}
+function cmdMdns(argv) {
+  const a = (argv[0] || '').toLowerCase();
+  if (!a || a === 'status') return mdnsStatus();
+  if (!['on', 'off', 'name'].includes(a)) return console.log(t('用法: agw mdns [on|off|name <名字>]'));
+  const c = loadCfg('default');
+  c.mdns = Object.assign({ enable: false, name: 'openagw' }, c.mdns || {});
+  let msg;
+  if (a === 'on') { c.mdns.enable = true; msg = 'mDNS 已开启'; }
+  else if (a === 'off') { c.mdns.enable = false; msg = 'mDNS 已关闭'; }
+  else {
+    if (!argv[1]) die('用法: agw mdns name <名字>');
+    const n = mdnsMod.sanitizeName(argv[1]);
+    if (!n) die('名字只能包含字母/数字/连字符');
+    c.mdns.name = n;
+    msg = 'mDNS 名字: ' + n + '.local';
+  }
+  saveCfg('default', c);
+  ok(msg);
+  if (c.tls && c.tls.enable) console.log(C.dim('  TLS 证书 SAN 需包含该域名(改名时): agw refresh ca'));
+  if (!gwAlive()) { console.log(C.dim('  网关未运行, 下次启动生效')); return; }
+  return hotRestart('default');
 }
 
 /* ---------- tunnel loop ---------- */
@@ -1806,6 +1859,7 @@ function help(sub) {
 运维
   agw <start|stop|restart|status>               网关进程启停(agw.sh 同款)
   agw refresh ca                                重签 TLS 证书并重启
+  agw mdns [on|off|name <名字>]                 局域网域名 <名字>.local (mDNS)
   agw record <on|off> [--server "user:pass@host:port"] [--max-length <n>] [实例]
   agw cloudflared <start|stop|restart|clear>
   agw notice                                    告警汇总(空key/卡到期/余额/证书)
@@ -1831,7 +1885,7 @@ function help(sub) {
 const CMDS = {
   web: cmdWeb,
   inst: cmdInst, router: cmdRouter, chan: cmdChan, fetch: cmdFetch,
-  card: cmdCard, refresh: cmdRefresh, record: cmdRecord, cloudflared: cmdCloudflared,
+  card: cmdCard, refresh: cmdRefresh, record: cmdRecord, cloudflared: cmdCloudflared, mdns: cmdMdns,
   lang: cmdLang, notice: cmdNotice, stat: cmdStat, admin: cmdAdmin,
   encrypt: cmdEncrypt, decrypr: cmdDecrypt, recrypt: cmdRecrypt,
   export: cmdExport, inport: cmdInport, config: cmdConfig, crypt: cmdCrypt,

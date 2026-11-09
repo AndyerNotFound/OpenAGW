@@ -20,6 +20,7 @@ const { socks5Connect, httpConnect, dialViaProxy, makeReader } = require('./prox
 const state = require('./state');
 const rt = require('./runtime');
 const hot = require('./hot');
+const mdns = require('./mdns');
 
 // Persist everything a restart would otherwise lose (key usage, stats, plugin buffers)
 function flushAll(cfg) {
@@ -54,8 +55,10 @@ function main() {
   if (!cfg.channels.length) logErr('⚠ No valid channels in config; requests will return 503');
   process.on('unhandledRejection', e => logErr('unhandledRejection:', (e && e.message) || e));
   process.on('uncaughtException', e => logErr('uncaughtException:', (e && e.message) || e));
-  process.on('SIGTERM', () => { flushAll(cfg); process.exit(0); });
-  process.on('SIGINT', () => process.exit(0));
+  process.on('SIGTERM', () => { mdns.stopAll({ goodbye: true }); flushAll(cfg); process.exit(0); });
+  process.on('SIGINT', () => { mdns.stopAll({ goodbye: true }); process.exit(0); });
+// hot restart: the replacement worker has already claimed the name, leave without goodbye packets
+  hot.onDrain(() => mdns.stopAll({ goodbye: false }));
   // multi-instance by default (hosts every config*.json); AGW_SINGLE=1 or a port arg falls back to one instance
   const multi = portOverride == null && process.env.AGW_SINGLE !== '1';
   let started = null;

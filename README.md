@@ -22,7 +22,7 @@ Gemini ──┘    convert ⇄ redact       └──▶  Claude official
 
 ## Proven, not promised
 
-- **32 test suites · 847 assertions — all green.** Every suite is standalone: `node test/<name>_test.js`, no install, no build step.
+- **33 test suites · 893 assertions — all green.** Every suite is standalone: `node test/<name>_test.js`, no install, no build step.
 - The full converter matrix (all 9 dialect pairs, streaming and not) plus proxy / auth / failover E2E pass in the maintainer's sandbox — **215/215**.
 - Nothing to download for the gateway itself — the whole project is plain Node.js, so the test suite doubles as your smoke test.
 
@@ -143,6 +143,37 @@ agw web --expired [--inst <instance>]                  # revoke all panel sessio
 - **Config encryption & portability** — encrypt config files at rest, export / import as JSON or QR code (`bash agw.sh config`).
 - **Docker** — `docker compose up -d` (port 16384, state in the `ai-gateway-data` volume); panel link: `docker compose exec ai-gateway node /app/agw.js web login`.
 
+### LAN name (mDNS)
+
+A phone gets a new address on every Wi-Fi reconnect, so a client Base URL keyed on an IP goes stale.
+With `mdns.enable` the gateway answers mDNS / DNS-SD on the local network, and clients there use a
+stable name instead:
+
+```json
+"mdns": { "enable": true, "name": "openagw" }
+```
+
+```bash
+agw mdns on             # enable in config and hot-reload the worker
+agw mdns                # what is actually on the air (name, service, addresses, conflicts)
+agw mdns name mygw      # mygw.local
+agw mdns off
+```
+
+- Advertises `<name>.local` (A records for the private IPv4 LAN addresses) plus the DNS-SD service
+  `_http._tcp` / `_https._tcp` with `path=/v1`, so a Bonjour/avahi browser also lists it. Zero
+  dependencies — the responder is `mdns.js`, a few hundred lines of `dgram`.
+- Only the main port is advertised; the setting lives in the default instance. Off by default
+  because it broadcasts on the network.
+- A name already claimed on the LAN renames the responder (`openagw-2.local`) and logs it; `agw mdns`
+  shows the live name. Wi-Fi changes are picked up within ~15 s (re-join + re-announce).
+- macOS/iOS resolve `.local` natively and Windows since 10 1703; Linux needs avahi or
+  systemd-resolved. Android resolves it through the system resolver only (DNS Resolver module,
+  Android 12+), so apps with their own resolver still need the IP — and Android skips `.local`
+  resolution while a VPN or mobile data connection is active.
+- With TLS on, the certificate must carry `DNS:<name>.local`: `tls/gen-server.sh` adds it
+  automatically and `agw refresh ca` re-signs when the name changes.
+
 ### OpenAI extended endpoints (fixed behavior)
 
 `POST /v1/responses` is always available — a full conversion endpoint (streaming, tool calls, reasoning) between Responses and Chat/Claude/Gemini bodies. Every other `/v1/*` path that is not a conversion entry or a gateway-local route is always forwarded verbatim to an OpenAI-type channel: `images`, `embeddings`, `audio/speech`, `audio/transcriptions`, `audio/translations`, `completions`, `moderations`, `files`, `batches`, `vector_stores`, …; method, path, query, multipart and binary bodies are preserved. Channel-level `useResponses: true` lets an OpenAI upstream speak the Responses API.
@@ -243,6 +274,7 @@ Every suite runs anywhere — no npm install, no build step:
 | `test/hot_restart_test.js` | 9 | worker swap with an in-flight SSE stream |
 | `test/key_roles_test.js` | 23 | one-key-one-role card semantics |
 | `test/log_memory_test.js` | 13 | log tail read is bounded by a window, not by file size; rotation keeps a sane size |
+| `test/mdns_test.js` | 46 | mDNS/DNS-SD wire format, advertised records, UDP answers, name-conflict rename, http/https switch |
 | `test/mixed_modelmap_test.js` | 3 | modelMap + models list on one channel |
 | `test/modelref_test.js` | 20 | composite `instance:channel:model` routing |
 | `test/no_multiuser_test.js` | 20 | single-tenant behavior (accounts removed, card keys kept) |
@@ -267,7 +299,7 @@ Every suite runs anywhere — no npm install, no build step:
 | `test/tls_single_entry_test.js` | 7 | TLS single entry — never a plaintext twin |
 | `test/utf8_split_test.js` | 4 | chunk-split decoding |
 
-**795 assertions, 0 failures** — measured on Node `v24.22.2` (Termux). The full converter matrix (all 9 dialect pairs, streaming and not) and proxy / auth / failover E2E run in the maintainer's sandbox — 215/215.
+**893 assertions, 0 failures** — measured on Node `v24.22.2` (Termux). The full converter matrix (all 9 dialect pairs, streaming and not) and proxy / auth / failover E2E run in the maintainer's sandbox — 215/215.
 
 ## License
 

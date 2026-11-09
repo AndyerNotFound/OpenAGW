@@ -19,6 +19,11 @@ let quietTicks = 0;
 let serversOf = () => [];
 let onFlush = () => {};
 let flushedForHandoff = false;
+let onDrainHook = null;
+
+// Called once when the worker is told to drain (mDNS withdraws its single-port advertisement here,
+// without goodbye packets: the replacement worker has already announced the same records).
+function onDrain(fn) { onDrainHook = typeof fn === 'function' ? fn : null; }
 
 // In-flight counter, once per request at the top of handleHttp.
 function track(req, res) {
@@ -142,6 +147,7 @@ function startDrain() {
   if (draining) return;
   draining = true;
   log('[hot] 收到换血指令: 停止接新连接, 在途 ' + active + ' 个请求跑完后退出');
+  if (onDrainHook) { try { onDrainHook(); } catch (e) { logErr('[hot] drain hook 失败: ' + e.message); } }
   try { if (cluster.worker) cluster.worker.disconnect(); } catch (e) { logErr('[hot] disconnect 失败: ' + e.message); }
   const t0 = Date.now();
   const timer = setInterval(() => {
@@ -158,4 +164,4 @@ function startDrain() {
   }, 250);
 }
 
-module.exports = { ENABLED, primary, worker, ready, track, isDraining, cluster };
+module.exports = { ENABLED, primary, worker, ready, track, isDraining, onDrain, cluster };

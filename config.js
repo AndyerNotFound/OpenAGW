@@ -11,6 +11,7 @@ const zlib = require('zlib');
 const { logErr } = require('./util');
 const { redactCache } = require('./redact');
 const { normalizeOverride } = require('./override');
+const mdns = require('./mdns');
 let crypt = null; try { crypt = require('./crypt.js'); } catch (_) {}
 
 // ================= Config loading =================
@@ -97,6 +98,13 @@ cfg.adminExpireAt = Number(cfg.adminExpireAt) > 0 ? Number(cfg.adminExpireAt) : 
 cfg.tls.port = null; // legacy field, ignored: one entry per instance -- HTTPS on listen.port, never a plaintext twin
     delete cfg.tls.port;
   }
+// mDNS / DNS-SD LAN name (off by default: it broadcasts the gateway's presence on the network)
+  cfg.mdns = (cfg.mdns && typeof cfg.mdns === 'object' && !Array.isArray(cfg.mdns)) ? cfg.mdns : {};
+  cfg.mdns.enable = !!cfg.mdns.enable;
+  const mdnsRaw = String(cfg.mdns.name == null ? '' : cfg.mdns.name).trim();
+  cfg.mdns.name = mdns.sanitizeName(mdnsRaw) || 'openagw';
+  if (mdnsRaw && !mdns.sanitizeName(mdnsRaw)) logErr('[config] mdns.name 只能包含字母/数字/连字符, 已回退 openagw');
+
 // Migration: adminKey is deprecated and merges into webToken (the single admin credential)
   if (cfg.adminKey && !cfg.webToken) { cfg.webToken = String(cfg.adminKey); }
   delete cfg.adminKey;

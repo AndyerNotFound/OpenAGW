@@ -24,6 +24,7 @@ const state = require('./state');
 const panelAuth = require('./panel-auth');
 const hot = require('./hot');
 const { completePath } = require('./endpoints');
+const mdns = require('./mdns');
 /* Endpoint completion logs once per bare path, not once per request: a client whose base URL
  * has no /v1 would otherwise add a line to every single call. */
 const EP_LOGGED = new Set();
@@ -341,6 +342,15 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
   req.on('error', () => {});
 }
 
+// Advertise the main port over mDNS (no-op unless config mdns.enable)
+function startMdns(cfg, port, tls) {
+  try {
+    mdns.apply({ enable: !!(cfg.mdns && cfg.mdns.enable), name: cfg.mdns && cfg.mdns.name, port, tls });
+  } catch (e) {
+    logErr('[mdns] 启动失败: ' + e.message);
+  }
+}
+
 function startServer(cfg, opts = {}) {
   state.CUR_CFG = cfg;
   applyDefaults(cfg);
@@ -435,6 +445,7 @@ try { // cold-start restore
         log(`OpenAGW v${VERSION} 就绪: http://${host === '0.0.0.0' ? '127.0.0.1(本机)/局域网IP' : host}:${realPort}  配置: ${cfg._configFile}`);
         for (const ch of cfg.channels) log(`  渠道 [${ch.type}] ${ch.name} → ${ch.baseUrl}  proxy=${ch.proxy || '直连'}${ch.default ? '  (default)' : ''}`);
         for (const [k, v] of Object.entries(cfg.proxies)) log(`  代理 ${k} = ${v.type}://${v.host}:${v.port}${v.username ? ' (带认证)' : ''}`);
+        startMdns(cfg, realPort, false);
         resolve({ server, port: realPort, host, cfg });
       });
     });
@@ -453,6 +464,7 @@ try { // cold-start restore
       }
       for (const ch of cfg.channels) log(`  渠道 [${ch.type}] ${ch.name} → ${ch.baseUrl}  proxy=${ch.proxy || '直连'}${ch.default ? '  (default)' : ''}`);
       for (const [k, v] of Object.entries(cfg.proxies)) log(`  代理 ${k} = ${v.type}://${v.host}:${v.port}${v.username ? ' (带认证)' : ''}`);
+      if (results.ports.length) startMdns(cfg, results.ports[0][0], results.ports[0][1] === 'https');
     };
 
     let pending = 1;

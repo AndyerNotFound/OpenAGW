@@ -31,13 +31,16 @@ cfg() {
     const D=process.argv[1],w=process.argv[2];
     try{
       const c=require(path.join(D,"crypt.js"));
-      let r=fs.readFileSync(path.join(D,"config.json"),"utf8");
+      const dd=fs.existsSync(path.join(D,"data","config.json"))?path.join(D,"data"):D;
+      let r=fs.readFileSync(path.join(dd,"config.json"),"utf8");
       if(c.isEncText(r))r=c.decryptText(r,c.loadPass());
       const j=JSON.parse(r), t=j.tls||(j.listen&&j.listen.tls)||{};
       const hp=(j.listen||{}).port||16384;
+      const md=j.mdns||{};
       const o={httpport:hp, enabled:!!t.enable,
                httpsport:t.enable?hp:null,
-               gwkey:j.gatewayKey||""};
+               gwkey:j.gatewayKey||"",
+               mdns:md.enable?String(md.name||"openagw"):""};
       const v=o[w];
       process.stdout.write(v===undefined||v===null?"":String(v));
     }catch(e){process.stdout.write("")}
@@ -49,10 +52,11 @@ stat_inst() {
   node -e '
     const fs=require("fs"),path=require("path");
     const D=process.argv[1]; const c=require(path.join(D,"crypt.js"));
-    const files=fs.readdirSync(D).filter(f=>/^config(\..+)?\.json$/.test(f));
+    const dd=fs.existsSync(path.join(D,"data","config.json"))?path.join(D,"data"):D;
+    const files=fs.readdirSync(dd).filter(f=>/^config(\..+)?\.json$/.test(f));
     let on=0,tot=0,mainOn=false;
     for(const f of files){
-      let r=fs.readFileSync(path.join(D,f),"utf8");
+      let r=fs.readFileSync(path.join(dd,f),"utf8");
       if(c.isEncText(r))r=c.decryptText(r,c.loadPass());
       const j=JSON.parse(r), t=j.tls||(j.listen&&j.listen.tls)||{};
       tot++; if(t.enable){on++; if(f==="config.json")mainOn=true;}
@@ -81,6 +85,16 @@ status() {
     echo "  Status   ⛔ TLS off (currently plaintext http only)"
     echo "  Use      http://${ip}:${hp}/v1"
     echo "          want TLS: agw-tls setup"
+  fi
+  local mdnsn; mdnsn="$(cfg mdns)"
+  if [ -n "$mdnsn" ]; then
+    if [ "$en" = "true" ] && [ -n "$sp" ]; then
+      echo "  mDNS     https://${mdnsn}.local:${sp}/v1   (same network: use this name)"
+    else
+      echo "  mDNS     http://${mdnsn}.local:${hp}/v1   (same network: use this name)"
+    fi
+  else
+    echo "  mDNS     off    enable: agw mdns on"
   fi
   echo "  Key      $(mask "$(curkey)")    view: cat $KEYFILE"
   echo "  Cert     $(days_left) days left (auto-renewed, nothing to do)"

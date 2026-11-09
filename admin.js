@@ -13,6 +13,7 @@ const zlib = require('zlib');
 const crypto2 = require('crypto');
 const https2 = require('https');
 const panelAuth = require('./panel-auth');
+const mdns = require('./mdns');
 const { isEndpointHead } = require('./endpoints');
 const { VERSION, utf8 } = require('./util');
 const { normalizeOverride } = require('./override');
@@ -2068,6 +2069,24 @@ function dashOf(c) {
     breaker: Object.fromEntries(Object.entries(c._breakerState || {}).map(([k, v]) => [k, { broken: !!(v.until > Date.now()), until: v.until || 0, fails: (v.fails || []).length }])),
   };
 }
+
+// GET /admin/api/mdns -- the name actually on the air (a LAN name clash renames it at runtime)
+  if (req.method === 'GET' && api === 'mdns') {
+    let m = {};
+    try { const c = loadCfg('default'); m = (c && c.mdns) || {}; } catch (_) {}
+    const h = mdns.current();
+    return jsonRes(res, 200, {
+      enable: !!m.enable,
+      name: h ? h.name : (m.name || 'openagw'),
+      host: h ? h.host : String(m.name || 'openagw') + '.local',
+      url: h ? h.url : '',
+      instance: h ? h.instance : '',
+      service: h ? h.service : '',
+      state: h ? h.state : 'off',
+      ips: h ? h.ips : [],
+      conflicts: h ? h.conflictsSeen : 0,
+    });
+  }
 
 // GET /admin/api/stats?instance=X -- live instance stats (cross-instance local proxy supported)
   if (req.method === 'GET' && api === 'stats') {
