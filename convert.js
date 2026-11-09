@@ -23,6 +23,92 @@ const { SSEDecoder } = require('./sse');
  * canonical events: {type:'start',usage?} {type:'text',t} {type:'reasoning',t}
  *                {type:'tool_start',i,id,name} {type:'tool_delta',i,s} {type:'end',finish_reason,usage}
  * ================================================================ */
+/* ---- Cross-dialect generation parameters ----
+ * Carrying only temperature/top_p/max_tokens through the hub silently drops the rest of the
+ * request contract (seed, penalties, JSON mode, reasoning effort, thinking budget, top_k ...).
+ * Each parser lifts what its dialect knows onto the canonical object and parks everything else
+ * in `extra`; each builder writes back what its target API accepts, then re-merges `extra`
+ * verbatim when the channel speaks the client's dialect - so even a parameter this gateway has
+ * never heard of reaches the upstream untouched. */
+const PARAM_FIELDS = ['top_k', 'presence_penalty', 'frequency_penalty', 'seed', 'n', 'logit_bias', 'logprobs', 'top_logprobs', 'response_format', 'parallel_tool_calls', 'user', 'metadata', 'reasoning_effort', 'thinking', 'service_tier', 'store', 'safety_settings', 'thinking_config'];
+const CONSUMED_OPENAI = new Set(['model', 'stream', 'messages', 'temperature', 'top_p', 'max_tokens', 'max_completion_tokens', 'stop', 'stream_options', 'tools', 'tool_choice', 'reasoning', ...PARAM_FIELDS]);
+const CONSUMED_CLAUDE = new Set(['model', 'stream', 'messages', 'system', 'temperature', 'top_p', 'max_tokens', 'stop_sequences', 'tools', 'tool_choice', ...PARAM_FIELDS]);
+const CONSUMED_GEMINI = new Set(['model', 'stream', 'contents', 'systemInstruction', 'system_instruction', 'generationConfig', 'generation_config', 'tools', 'toolConfig', 'tool_config', 'safetySettings', 'safety_settings', ...PARAM_FIELDS]);
+const CONSUMED_RESPONSES = new Set(['model', 'stream', 'input', 'instructions', 'temperature', 'top_p', 'max_tokens', 'max_output_tokens', 'stop', 'tools', 'tool_choice', 'reasoning', 'text', ...PARAM_FIELDS]);
+/* Fields the builders own: extra must never overwrite them */
+const BODY_CORE = new Set(['model', 'messages', 'input', 'contents', 'stream', 'system', 'instructions', 'tools', 'tool_choice']);
+function pickParams(src, out) {
+  for (const k of PARAM_FIELDS) if (src && src[k] !== undefined) out[k] = src[k];
+  return out;
+}
+/* Everything the dialect parser did not consume rides along untouched */
+function collectExtra(body, consumed) {
+  let out;
+  for (const k of Object.keys(body || {})) {
+    if (k.charAt(0) === '_' || consumed.has(k) || body[k] === undefined) continue;
+    if (!out) out = {};
+    out[k] = body[k];
+  }
+  return out;
+}
+function finishCanonical(out, body, consumed, dialect) {
+  out._clientFormat = dialect;
+  const extra = collectExtra(body, consumed);
+  if (extra) out.extra = extra;
+  return out;
+}
+/* Re-merge the client's own fields - only for a channel speaking the same dialect */
+function mergeExtra(body, c, dialect) {
+  if (!c || c._clientFormat !== dialect || !c.extra) return body;
+  for (const k of Object.keys(c.extra)) {
+    if (BODY_CORE.has(k) || body[k] !== undefined) continue;
+    body[k] = c.extra[k];
+  }
+  return body;
+}
+/* JSON-mode contract: OpenAI response_format <-> Gemini responseMimeType/responseSchema */
+function geminiResponseFormat(g) {
+  const schema = g.responseSchema || g.response_schema;
+  if (schema && typeof schema === 'object') return { type: 'json_schema', json_schema: { name: 'output', schema } };
+  const mime = g.responseMimeType || g.response_mime_type;
+  if (mime && String(mime).toLowerCase().includes('json')) return { type: 'json_object' };
+  return undefined;
+}
+function genConfigExtra(g) {
+  const known = new Set(['temperature', 'topP', 'top_p', 'topK', 'top_k', 'maxOutputTokens', 'max_output_tokens', 'stopSequences', 'stop_sequences', 'candidateCount', 'candidate_count', 'presencePenalty', 'presence_penalty', 'frequencyPenalty', 'frequency_penalty', 'seed', 'responseMimeType', 'response_mime_type', 'responseSchema', 'response_schema', 'thinkingConfig', 'thinking_config', 'responseLogprobs', 'response_logprobs', 'logprobs']);
+  let out;
+  for (const k of Object.keys(g || {})) {
+    if (known.has(k) || g[k] === undefined) continue;
+    if (!out) out = {};
+    out[k] = g[k];
+  }
+  return out;
+}
+function responsesTextFormatToOpenAI(f) {
+  if (!f || typeof f !== 'object') return undefined;
+  if (f.type === 'json_schema') return { type: 'json_schema', json_schema: { name: f.name || 'output', schema: f.schema, strict: f.strict } };
+  if (f.type === 'json_object') return { type: 'json_object' };
+  return undefined;
+}
+function openAITextFormat(rf) {   // response_format -> Responses text.format / Claude output_config.format
+  if (!rf || typeof rf !== 'object') return undefined;
+  if (rf.type === 'json_schema') {
+    const js = rf.json_schema || {};
+    const out = { type: 'json_schema', name: js.name || 'output', schema: js.schema || rf.schema || { type: 'object' } };
+    if (js.strict !== undefined) out.strict = !!js.strict;
+    return out;
+  }
+  if (rf.type === 'json_object') return { type: 'json_object' };
+  return undefined;
+}
+/* reasoning_effort -> token budget for dialects that take one */
+function effortToBudget(effort) {
+  return ({ minimal: 1024, low: 2048, medium: 8192, high: 16384, xhigh: 24576 })[String(effort || '').toLowerCase()] || 0;
+}
+function claudeEffort(effort) {
+  const e = String(effort || '').toLowerCase();
+  return ({ minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh' })[e] || '';
+}
 function openaiToCanonical(body, urlModel) {
   const messages = [];
   for (const m of (body.messages || [])) {
@@ -44,7 +130,7 @@ function openaiToCanonical(body, urlModel) {
     }
     messages.push(out);
   }
-  return {
+  const out = {
     model: body.model || urlModel,
     stream: !!body.stream,
     messages,
@@ -55,6 +141,9 @@ function openaiToCanonical(body, urlModel) {
     tools: (Array.isArray(body.tools) && body.tools.length) ? body.tools : undefined,
     tool_choice: body.tool_choice,
   };
+  pickParams(body, out);
+  if (out.reasoning_effort === undefined && body.reasoning && typeof body.reasoning === 'object' && body.reasoning.effort) out.reasoning_effort = body.reasoning.effort;
+  return finishCanonical(out, body, CONSUMED_OPENAI, 'openai');
 }
 
 function claudeToolsToOpenAI(tools) {
@@ -112,7 +201,7 @@ function claudeToCanonical(body, urlModel) {
       messages.push({ role: 'user', content: textParts });
     }
   }
-  return {
+  const out = {
     model: body.model || urlModel,
     stream: !!body.stream,
     messages,
@@ -123,6 +212,9 @@ function claudeToCanonical(body, urlModel) {
     tools: claudeToolsToOpenAI(body.tools),
     tool_choice: claudeChoiceToOpenAI(body.tool_choice),
   };
+  pickParams(body, out);
+  if (!out.user && out.metadata && typeof out.metadata === 'object' && out.metadata.user_id) out.user = String(out.metadata.user_id);
+  return finishCanonical(out, body, CONSUMED_CLAUDE, 'claude');
 }
 
 function geminiToCanonical(body, urlModel) {
@@ -186,7 +278,7 @@ function geminiToCanonical(body, urlModel) {
     else if (mode === 'NONE') tool_choice = 'none';
     else tool_choice = 'auto';
   }
-  return {
+  const out = {
     model: urlModel || body.model,
     stream: !!body.stream,
     messages,
@@ -194,9 +286,23 @@ function geminiToCanonical(body, urlModel) {
     top_p: g.topP != null ? g.topP : g.top_p,
     max_tokens: g.maxOutputTokens != null ? g.maxOutputTokens : g.max_output_tokens,
     stop: normStop(g.stopSequences != null ? g.stopSequences : g.stop_sequences),
+    top_k: g.topK != null ? g.topK : g.top_k,
+    presence_penalty: g.presencePenalty != null ? g.presencePenalty : g.presence_penalty,
+    frequency_penalty: g.frequencyPenalty != null ? g.frequencyPenalty : g.frequency_penalty,
+    seed: g.seed,
+    n: g.candidateCount != null ? g.candidateCount : g.candidate_count,
+    logprobs: (g.responseLogprobs != null) ? !!g.responseLogprobs : (g.response_logprobs != null ? !!g.response_logprobs : undefined),
+    top_logprobs: g.logprobs != null ? g.logprobs : undefined,
+    response_format: geminiResponseFormat(g),
+    thinking_config: g.thinkingConfig || g.thinking_config,
+    safety_settings: body.safetySettings || body.safety_settings,
     tools: tools.length ? tools : undefined,
     tool_choice,
   };
+  const done = finishCanonical(out, body, CONSUMED_GEMINI, 'gemini');
+  const gcExtra = genConfigExtra(g);
+  if (gcExtra) { done.extra = done.extra || {}; done.extra.generationConfig = gcExtra; }
+  return done;
 }
 
 /* ================= OpenAI Responses API conversion ================= */
@@ -304,7 +410,7 @@ function responsesToCanonical(body, urlModel) {
   let tool_choice;
   if (typeof body.tool_choice === 'string') tool_choice = body.tool_choice;
   else if (body.tool_choice && body.tool_choice.type === 'function' && body.tool_choice.name) tool_choice = { type: 'function', function: { name: body.tool_choice.name } };
-  return {
+  const out = {
     model: body.model || urlModel,
     stream: !!body.stream,
     messages,
@@ -315,6 +421,10 @@ function responsesToCanonical(body, urlModel) {
     tools,
     tool_choice,
   };
+  pickParams(body, out);
+  if (out.reasoning_effort === undefined && body.reasoning && typeof body.reasoning === 'object' && body.reasoning.effort) out.reasoning_effort = body.reasoning.effort;
+  if (body.text && body.text.format) out.response_format = responsesTextFormatToOpenAI(body.text.format);
+  return finishCanonical(out, body, CONSUMED_RESPONSES, 'openai-responses');
 }
 
 // canonical -> upstream Responses body (system -> instructions, messages -> input items)
@@ -371,7 +481,18 @@ function canonicalToResponsesBody(c) {
       else body.tool_choice = 'auto';
     }
   }
-  return body;
+/* Generation parameters: Responses accepts reasoning effort, JSON mode, metadata and store */
+  if (c.reasoning_effort !== undefined) body.reasoning = { ...(body.reasoning || {}), effort: c.reasoning_effort };
+  if (c.response_format) {
+    const tf = openAITextFormat(c.response_format);
+    if (tf) body.text = { ...(body.text || {}), format: tf };
+  }
+  if (c.parallel_tool_calls !== undefined) body.parallel_tool_calls = c.parallel_tool_calls;
+  if (c.metadata && typeof c.metadata === 'object') body.metadata = c.metadata;
+  if (c.user !== undefined) body.user = c.user;
+  if (c.store !== undefined) body.store = c.store;
+  if (c.service_tier !== undefined) body.service_tier = c.service_tier;
+  return mergeExtra(body, c, 'openai-responses');
 }
 
 /* ================= Exit building: canonical -> upstream format ================= */
@@ -412,7 +533,13 @@ function canonicalToOpenAIBody(c, opts = {}) {
     if (c.tool_choice) body.tool_choice = c.tool_choice;
   }
   if (c.stream && opts.addUsage !== false) body.stream_options = { include_usage: true };
-  return body;
+/* Generation parameters: pass through everything Chat Completions understands.
+ * `metadata`/`store`/`service_tier` are OpenAI-only and stay off this list where they would be
+ * rejected; the same-dialect extra merge below still carries them when the channel is OpenAI. */
+  for (const k of ['presence_penalty', 'frequency_penalty', 'seed', 'n', 'logit_bias', 'logprobs', 'top_logprobs', 'response_format', 'parallel_tool_calls', 'user', 'reasoning_effort', 'service_tier', 'store']) {
+    if (c[k] !== undefined && c[k] !== null) body[k] = c[k];
+  }
+  return mergeExtra(body, c, 'openai');
 }
 
 function claudeFinish(reason) {
@@ -483,7 +610,31 @@ function canonicalToClaudeBody(c) {
     else if (c.tool_choice === 'none') { /* Claude 无 none 语义, 保留 tools 默认 auto */ }
     else if (c.tool_choice && typeof c.tool_choice === 'object' && c.tool_choice.function) body.tool_choice = { type: 'tool', name: c.tool_choice.function.name };
   }
-  return body;
+/* Claude-native parameters: top_k, thinking budget, metadata.user_id, structured output */
+  if (c.top_k !== undefined) body.top_k = c.top_k;
+/* thinking: Claude's own shape wins; a Gemini thinking budget (or a bare reasoning effort) is mapped onto it */
+  let think = (c.thinking && typeof c.thinking === 'object') ? c.thinking : null;
+  if (!think && c.thinking_config && typeof c.thinking_config === 'object') {
+    const b = Number(c.thinking_config.thinkingBudget != null ? c.thinking_config.thinkingBudget : c.thinking_config.thinking_budget) || 0;
+    if (b > 0) think = { type: 'enabled', budget_tokens: b };
+  }
+  if (think) {
+    body.thinking = think;
+    const budget = Number(think.budget_tokens) || 0;
+    if (think.type === 'enabled' && budget > 0 && Number(body.max_tokens) <= budget) body.max_tokens = budget + 1024;   // API requires max_tokens > budget_tokens
+  }
+  const meta = (c.metadata && typeof c.metadata === 'object' && c.metadata.user_id) ? c.metadata : (c.user !== undefined ? { user_id: String(c.user) } : null);
+  if (meta) body.metadata = { user_id: String(meta.user_id) };
+  if (c.service_tier !== undefined) body.service_tier = c.service_tier;
+  if (c.response_format) {
+    const tf = openAITextFormat(c.response_format);
+    if (tf && tf.type === 'json_schema') body.output_config = { ...(body.output_config || {}), format: { type: 'json_schema', schema: tf.schema } };
+  }
+  if (c.reasoning_effort !== undefined) {
+    const eff = claudeEffort(c.reasoning_effort);
+    if (eff) body.output_config = { ...(body.output_config || {}), effort: eff };
+  }
+  return mergeExtra(body, c, 'claude');
 }
 
 function geminiFinish(reason) {
@@ -543,6 +694,31 @@ function canonicalToGeminiBody(c) {
   if (c.top_p !== undefined) gc.topP = c.top_p;
   if (c.max_tokens !== undefined) gc.maxOutputTokens = c.max_tokens;
   if (c.stop && c.stop.length) gc.stopSequences = c.stop;
+/* Generation parameters: Gemini's generationConfig is the richest of the three dialects */
+  if (c.top_k !== undefined) gc.topK = c.top_k;
+  if (c.n !== undefined) gc.candidateCount = c.n;
+  if (c.presence_penalty !== undefined) gc.presencePenalty = c.presence_penalty;
+  if (c.frequency_penalty !== undefined) gc.frequencyPenalty = c.frequency_penalty;
+  if (c.seed !== undefined) gc.seed = c.seed;
+  if (c.logprobs !== undefined) gc.responseLogprobs = !!c.logprobs;
+  if (c.top_logprobs !== undefined) gc.logprobs = c.top_logprobs;
+  if (c.response_format) {
+    const rf = c.response_format;
+    const schema = rf.type === 'json_schema' ? ((rf.json_schema && rf.json_schema.schema) || rf.schema) : null;
+    if (schema) { gc.responseMimeType = 'application/json'; gc.responseSchema = schema; }
+    else if (rf.type === 'json_object') gc.responseMimeType = 'application/json';
+  }
+  if (c.thinking_config && typeof c.thinking_config === 'object') gc.thinkingConfig = c.thinking_config;
+  else if (c.thinking && c.thinking.type === 'enabled') {
+    const budget = Number(c.thinking.budget_tokens) || 0;
+    if (budget > 0) gc.thinkingConfig = { thinkingBudget: Math.min(budget, 24576) };
+  } else if (c.reasoning_effort !== undefined) {
+    const budget = effortToBudget(c.reasoning_effort);
+    if (budget) gc.thinkingConfig = { thinkingBudget: Math.min(budget, 24576) };
+  }
+  if (c._clientFormat === 'gemini' && c.extra && c.extra.generationConfig && typeof c.extra.generationConfig === 'object') {
+    for (const k of Object.keys(c.extra.generationConfig)) if (gc[k] === undefined) gc[k] = c.extra.generationConfig[k];
+  }
   if (Object.keys(gc).length) body.generationConfig = gc;
   if (c.tools && c.tools.length) {
     body.tools = [{
@@ -559,7 +735,8 @@ function canonicalToGeminiBody(c) {
     else if (c.tool_choice && typeof c.tool_choice === 'object' && c.tool_choice.function) { mode = 'ANY'; allowed = [c.tool_choice.function.name]; }
     if (mode) body.toolConfig = { functionCallingConfig: { mode, ...(allowed ? { allowedFunctionNames: allowed } : {}) } };
   }
-  return body;
+  if (c.safety_settings && Array.isArray(c.safety_settings) && c.safety_settings.length) body.safetySettings = c.safety_settings;
+  return mergeExtra(body, c, 'gemini');
 }
 
 /* ================= Upstream response (JSON) -> canonical ================= */
@@ -583,6 +760,7 @@ function openaiRespToCanonical(j) {
       input: usage.prompt_tokens != null ? usage.prompt_tokens : 0,
       output: usage.completion_tokens != null ? usage.completion_tokens : 0,
       cached: (usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens) || 0,
+      cacheRead: (usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens) || 0,
       reasoning: (usage.completion_tokens_details && usage.completion_tokens_details.reasoning_tokens) || 0,
     },
   };
@@ -607,6 +785,8 @@ function claudeRespToCanonical(j) {
       input: usage.input_tokens != null ? usage.input_tokens : 0,
       output: usage.output_tokens != null ? usage.output_tokens : 0,
       cached: (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0),
+      cacheRead: usage.cache_read_input_tokens || 0,
+      cacheWrite: usage.cache_creation_input_tokens || 0,
       reasoning: 0,
     },
   };
@@ -639,12 +819,44 @@ function geminiRespToCanonical(j) {
       input: u.promptTokenCount != null ? u.promptTokenCount : (u.prompt_token_count || 0),
       output: u.candidatesTokenCount != null ? u.candidatesTokenCount : (u.candidates_token_count || 0),
       cached: u.cachedContentTokenCount || u.cached_content_token_count || 0,
+      cacheRead: u.cachedContentTokenCount || u.cached_content_token_count || 0,
       reasoning: u.thoughtsTokenCount || u.thoughts_token_count || 0,
     },
   };
 }
 
 /* ================= canonical -> client-format response (JSON) ================= */
+/* Token breakdown must survive the trip back: cached prompt tokens and reasoning tokens are what
+ * clients use for cost accounting; dropping them made every cache hit look like a full-price call. */
+function openaiUsage(u) {
+  const o = { prompt_tokens: u.input || 0, completion_tokens: u.output || 0, total_tokens: (u.input || 0) + (u.output || 0) };
+  const cached = u.cacheRead != null ? u.cacheRead : (u.cached || 0);
+  if (cached) o.prompt_tokens_details = { cached_tokens: cached };
+  if (u.reasoning) o.completion_tokens_details = { reasoning_tokens: u.reasoning };
+  return o;
+}
+function claudeUsage(u) {
+  const o = { input_tokens: u.input || 0, output_tokens: u.output || 0 };
+  const read = u.cacheRead != null ? u.cacheRead : (u.cached || 0);
+  const write = u.cacheWrite || 0;
+  if (read) o.cache_read_input_tokens = read;
+  if (write) o.cache_creation_input_tokens = write;
+  return o;
+}
+function geminiUsage(u) {
+  const o = { promptTokenCount: u.input || 0, candidatesTokenCount: u.output || 0, totalTokenCount: (u.input || 0) + (u.output || 0) };
+  const cached = u.cacheRead != null ? u.cacheRead : (u.cached || 0);
+  if (cached) o.cachedContentTokenCount = cached;
+  if (u.reasoning) o.thoughtsTokenCount = u.reasoning;
+  return o;
+}
+function responsesUsage(u) {
+  const o = { input_tokens: u.input || 0, output_tokens: u.output || 0, total_tokens: (u.input || 0) + (u.output || 0) };
+  const cached = u.cacheRead != null ? u.cacheRead : (u.cached || 0);
+  if (cached) o.input_tokens_details = { cached_tokens: cached };
+  if (u.reasoning) o.output_tokens_details = { reasoning_tokens: u.reasoning };
+  return o;
+}
 function canonicalToOpenAIResp(cresp, model) {
   const message = { role: 'assistant', content: cresp.text === '' ? null : cresp.text };
   if (cresp.reasoning) message.reasoning_content = cresp.reasoning;
@@ -653,7 +865,7 @@ function canonicalToOpenAIResp(cresp, model) {
   return {
     id: randId('chatcmpl-'), object: 'chat.completion', created: nowSec(), model,
     choices: [{ index: 0, message, finish_reason: cresp.finish_reason }],
-    usage: { prompt_tokens: cresp.usage.input, completion_tokens: cresp.usage.output, total_tokens: cresp.usage.input + cresp.usage.output },
+    usage: openaiUsage(cresp.usage),
   };
 }
 function canonicalToClaudeResp(cresp, model) {
@@ -670,7 +882,7 @@ function canonicalToClaudeResp(cresp, model) {
     id: randId('msg_'), type: 'message', role: 'assistant', model,
     content,
     stop_reason: claudeFinish(cresp.finish_reason), stop_sequence: null,
-    usage: { input_tokens: cresp.usage.input, output_tokens: cresp.usage.output },
+    usage: claudeUsage(cresp.usage),
   };
 }
 function canonicalToGeminiResp(cresp, model) {
@@ -685,7 +897,7 @@ function canonicalToGeminiResp(cresp, model) {
   if (!parts.length) parts.push({ text: '' });
   return {
     candidates: [{ content: { role: 'model', parts }, finishReason: geminiFinish(cresp.finish_reason), index: 0 }],
-    usageMetadata: { promptTokenCount: cresp.usage.input, candidatesTokenCount: cresp.usage.output, totalTokenCount: cresp.usage.input + cresp.usage.output },
+    usageMetadata: geminiUsage(cresp.usage),
     modelVersion: model,
   };
 }
@@ -722,8 +934,9 @@ function responsesRespToCanonical(j) {
     usage: {
       input: usage.input_tokens != null ? usage.input_tokens : 0,
       output: usage.output_tokens != null ? usage.output_tokens : 0,
-      cached: (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0),
-      reasoning: 0,
+      cached: (usage.input_tokens_details && usage.input_tokens_details.cached_tokens) || 0,
+      cacheRead: (usage.input_tokens_details && usage.input_tokens_details.cached_tokens) || 0,
+      reasoning: (usage.output_tokens_details && usage.output_tokens_details.reasoning_tokens) || 0,
     },
   };
 }
@@ -746,7 +959,7 @@ function canonicalToResponsesResp(cresp, model) {
     id: randId('resp_'), object: 'response', created_at: nowSec(), status: finStatus, model, output,
     incomplete_details: cresp.finish_reason === 'length' ? { reason: 'max_output_tokens' } : null,
     instructions: null, metadata: {}, parallel_tool_calls: true,
-    usage: { input_tokens: cresp.usage.input, output_tokens: cresp.usage.output, total_tokens: cresp.usage.input + cresp.usage.output },
+    usage: responsesUsage(cresp.usage),
     error: null,
   };
 }
@@ -781,6 +994,7 @@ class UpstreamStreamParser {
         input: j.usage.prompt_tokens || 0,
         output: j.usage.completion_tokens || 0,
         cached: (j.usage.prompt_tokens_details && j.usage.prompt_tokens_details.cached_tokens) || 0,
+        cacheRead: (j.usage.prompt_tokens_details && j.usage.prompt_tokens_details.cached_tokens) || 0,
         reasoning: (j.usage.completion_tokens_details && j.usage.completion_tokens_details.reasoning_tokens) || 0,
       };
       if (ch.finish_reason) this.finishReason = ({ stop: 'stop', length: 'length', tool_calls: 'tool_calls', content_filter: 'content_filter', function_call: 'tool_calls' })[ch.finish_reason] || 'stop';
@@ -792,9 +1006,11 @@ class UpstreamStreamParser {
           input: u.input_tokens || 0,
           output: (this.usage && this.usage.output) || 0,
           cached: (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0),
+          cacheRead: u.cache_read_input_tokens || 0,
+          cacheWrite: u.cache_creation_input_tokens || 0,
           reasoning: 0,
         };
-        evs.push({ type: 'start', usage: { input: this.usage.input } });
+        evs.push({ type: 'start', usage: { input: this.usage.input, cached: this.usage.cached } });
       } else if (t === 'content_block_start') {
         const b = j.content_block || {};
         if (b.type === 'tool_use') evs.push({ type: 'tool_start', i: this.toolIdx++, id: b.id || randId('toolu_'), name: b.name || '' });
@@ -832,6 +1048,7 @@ class UpstreamStreamParser {
         input: u.promptTokenCount || 0,
         output: u.candidatesTokenCount || 0,
         cached: u.cachedContentTokenCount || u.cached_content_token_count || 0,
+        cacheRead: u.cachedContentTokenCount || u.cached_content_token_count || 0,
         reasoning: u.thoughtsTokenCount || u.thoughts_token_count || 0,
       };
       const fr = cand.finishReason || cand.finish_reason;
@@ -876,7 +1093,7 @@ function makeWriter(format, res, model, opts = {}) {
           ended = true;
           chunk({}, ev.finish_reason);
           const u = ev.usage || { input: 0, output: 0 };
-          sseData(res, { id, object: 'chat.completion.chunk', created, model, choices: [], usage: { prompt_tokens: u.input, completion_tokens: u.output, total_tokens: u.input + u.output } });
+          sseData(res, { id, object: 'chat.completion.chunk', created, model, choices: [], usage: openaiUsage(u) });
           res.write('data: [DONE]\n\n');
           res.end();
         }
@@ -887,11 +1104,11 @@ function makeWriter(format, res, model, opts = {}) {
   if (format === 'claude') {
     const id = randId('msg_');
     let started = false, sawAny = false, nextBlock = 0, open = null;
-    const usage = { input: 0, output: 0 };
+    const usage = { input: 0, output: 0, cached: 0 };
     const ensureStart = () => {
       if (started) return;
       started = true;
-      sseEvent(res, 'message_start', { type: 'message_start', message: { id, type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: usage.input, output_tokens: 1 } } });
+      sseEvent(res, 'message_start', { type: 'message_start', message: { id, type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: usage.input, output_tokens: 1, ...(usage.cached ? { cache_read_input_tokens: usage.cached } : {}) } } });
       sseEvent(res, 'ping', { type: 'ping' });
     };
     const closeOpen = () => { if (open) { sseEvent(res, 'content_block_stop', { type: 'content_block_stop', index: open.idx }); open = null; } };
@@ -911,6 +1128,7 @@ function makeWriter(format, res, model, opts = {}) {
         if (!ev || ended) return;
         if (ev.type === 'start') {
           if (ev.usage && ev.usage.input) usage.input = ev.usage.input;
+          if (ev.usage && ev.usage.cached) usage.cached = ev.usage.cached;
           ensureStart();
         } else if (ev.type === 'text') {
           sawAny = true; ensureStart();
@@ -939,7 +1157,7 @@ function makeWriter(format, res, model, opts = {}) {
           const u = ev.usage || { input: 0, output: 0 };
           if (u.input) usage.input = u.input;
           usage.output = u.output;
-          sseEvent(res, 'message_delta', { type: 'message_delta', delta: { stop_reason: claudeFinish(ev.finish_reason), stop_sequence: null }, usage: { output_tokens: u.output } });
+          sseEvent(res, 'message_delta', { type: 'message_delta', delta: { stop_reason: claudeFinish(ev.finish_reason), stop_sequence: null }, usage: { output_tokens: u.output, ...(u.cached ? { cache_read_input_tokens: u.cached } : {}) } });
           sseEvent(res, 'message_stop', { type: 'message_stop' });
           res.end();
         }
@@ -983,7 +1201,7 @@ function makeWriter(format, res, model, opts = {}) {
         ended = true;
         flushTool();
         const u = ev.usage || { input: 0, output: 0 };
-        writeChunk({ candidates: [{ content: { role: 'model', parts: [] }, finishReason: geminiFinish(ev.finish_reason), index: 0 }], usageMetadata: { promptTokenCount: u.input, candidatesTokenCount: u.output, totalTokenCount: u.input + u.output } });
+        writeChunk({ candidates: [{ content: { role: 'model', parts: [] }, finishReason: geminiFinish(ev.finish_reason), index: 0 }], usageMetadata: geminiUsage(u) });
         if (isArray) { if (firstArray) res.write('[]'); else res.write(']'); }
         res.end();
       }
@@ -1069,7 +1287,7 @@ function makeResponsesWriter(res, model) {
         const full = baseResp(finStatus);
         full.output = outputArr;
         full.incomplete_details = finStatus === 'incomplete' ? { reason: 'max_output_tokens' } : null;
-        full.usage = { input_tokens: usage.input, output_tokens: usage.output, total_tokens: usage.input + usage.output };
+        full.usage = responsesUsage(u);
         if (finStatus === 'failed') full.error = { code: 'server_error', message: 'upstream finished with content_filter' };
         sseData(res, { type: 'response.' + finStatus, response: full });
         res.write('data: [DONE]\n\n');

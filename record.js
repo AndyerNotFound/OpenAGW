@@ -60,7 +60,7 @@ function postRequestRecord(server, line) {
 }
 
 function handleUpstreamResponse(cfg, ch, clientFormat, clientApi, canonical, body, urlInfo, req, res, upRes, upReq, built, ctx, retryHook) {
-  const { direct, stream, upApi } = built;
+  const { direct, sameWire, stream, upApi } = built;
   const { logMeta, t0, usageCapture, stats } = ctx;
   const rpInc = (cfg.replace && Array.isArray(cfg.replace.inc)) ? rpCompile(cfg.replace.inc) : [];
   const ctSse = /event-stream/i.test(String(upRes.headers['content-type'] || ''));
@@ -302,6 +302,30 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
       const cresp = isResponsesUp ? responsesRespToCanonical(j) : UP_RESP[ch.type](j);
       usageCapture.input = cresp.usage.input;
       usageCapture.output = cresp.usage.output;
+      usageCapture.cached = cresp.usage.cached || 0;
+      usageCapture.reasoning = cresp.usage.reasoning || 0;
+/* Same dialect on both ends: the upstream body already has the client's shape, so filter it in
+ * place instead of round-tripping through the hub - the hub only models what it knows, and a
+ * round trip silently drops the rest (logprobs, system_fingerprint, annotations, provider extras). */
+      if (sameWire) {
+        try {
+          const __cpt = Math.max(1, Number(cfg.charsPerToken) || 4);
+          const __tok = (t) => tokOf(t, __cpt);
+          ctx.respDist.reasoning = __tok(cresp.reasoning);
+          ctx.respDist.text = __tok(cresp.text);
+          if (Array.isArray(cresp.tool_calls)) for (const tc of cresp.tool_calls) { const fn = (tc && tc.function) || {}; ctx.respDist.tool += __tok(fn.name) + __tok(fn.arguments) + 8; }
+        } catch (_) {}
+        if (respRedactOn(cfg, urlInfo)) {
+          try { redactDeep(j, cfg.redact && cfg.redact.extra, 0); } catch (e) { logErr('[redact] 非流式响应过滤失败:', e.message); }
+        }
+        if (rpInc.length) rpWalk(j, rpInc, 0, false);
+        try {
+          res.writeHead(upRes.statusCode || 200, { 'Content-Type': 'application/json', 'X-AI-Gateway-Channel': hdrName(ch.name), ...corsHeaders() });
+          res.end(JSON.stringify(j));
+        } catch (e) { logErr('[resp] 响应头下发失败:', e.message); try { res.destroy(); } catch (_) {} }
+        __settle(upRes.statusCode || 200);
+        return;
+      }
 
 if (respRedactOn(cfg, urlInfo)) {   // response-direction filter (non-streaming): content/thinking/tool args
         try {

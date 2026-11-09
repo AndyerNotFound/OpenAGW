@@ -21,7 +21,7 @@ Gemini ──┘    convert ⇄ redact       └──▶  Claude official
 
 ## Proven, not promised
 
-- **15 test suites · 303 assertions — all green.** Every suite is standalone: `node test/<name>_test.js`, no install, no build step.
+- **27 test suites · 740 assertions — all green.** Every suite is standalone: `node test/<name>_test.js`, no install, no build step.
 - The full converter matrix (all 9 dialect pairs, streaming and not) plus proxy / auth / failover E2E pass in the maintainer's sandbox — **215/215**.
 - Nothing to download for the gateway itself — the whole project is plain Node.js, so the test suite doubles as your smoke test.
 
@@ -107,6 +107,7 @@ Covered by `node test/endpoint_completion_test.js`.
 
 - **Model → channel**: exact hit in `modelMap` → the `models` list → the `default` channel → the first channel. `modelMap` renames too: `{"gpt-4o": "gemini-2.5-flash"}` serves a Gemini model to a GPT client.
 - **Conversion covers streaming, tool calls, images, thinking content, and usage/token accounting.**
+- **Parameters travel whole.** `temperature` / `top_p` / `max_tokens` / `stop` are translated per dialect; `top_k`, `seed`, penalties, `n`, `logit_bias`, `logprobs`, `response_format` / JSON schema, `reasoning_effort`, thinking budgets, `metadata`, `user`, `service_tier`, `store`, `safety_settings` and `parallel_tool_calls` are carried and written in the shape the target API expects. Anything the hub does not model rides in an `extra` bag and is re-merged verbatim when the channel speaks the client's dialect, so a same-dialect request reaches the upstream in its original shape — even with response redaction on. Usage comes back complete too: cached prompt tokens and reasoning tokens survive as `prompt_tokens_details` / `cache_read_input_tokens` / `cachedContentTokenCount` / `input_tokens_details`.
 - **Same-format responses pass through byte-for-byte** (or are converted event-by-event); privacy filtering remains a separate, optional feature. A failing channel (429 / 401 / 500–504 / connection error) transparently retries on the next one; genuine client errors (`400`) come back as-is. Once a stream has started, the current channel is locked in.
 - **Per-channel egress**: each channel can route through its own proxy (`"proxy": "clash"`), so Gemini / Claude can exit somewhere else than DeepSeek. `insecure: true` tolerates self-signed relays.
 
@@ -114,6 +115,7 @@ Covered by `node test/endpoint_completion_test.js`.
 
 On by default for requests; `redact.response: true` also masks the response direction.
 
+- **Content only.** It rewrites message text, system prompts, tool results and tool-call arguments. Protocol parameters are left alone: schemas (`tools`, `response_format`), `stop`, `metadata`, `user`, `id`s, image / file URLs and base64 payloads pass through untouched — a masked schema or URL is a broken request, not privacy. Numeric parameters whose name merely *contains* a sensitive word (`max_tokens`, `budget_tokens`, `max_output_tokens`) are never masked either.
 - Masks values under sensitive fields (`api_key`, `token`, `password`, `authorization`, …) and pattern-matches built-ins: `sk-` keys, GitHub / Slack / AWS / Google / GitLab / HuggingFace tokens, `Bearer` headers, emails, mainland-China mobile numbers, national IDs, bank cards (Luhn-validated), private IPv4.
 - **Streaming-safe**: SSE chunks are filtered so secrets split across fragments are still caught.
 - **Fast path**: text without sensitive traits skips regex entirely; long contexts use a chunk-level cache that recomputes only changed parts.
@@ -192,23 +194,35 @@ Every suite runs anywhere — no npm install, no build step:
 
 | Suite | Assertions | Covers |
 |---|---|---|
+| `test/admin_guard_test.js` | 10 | admin surface guarded: page auth, static extension whitelist, no hints on 401 |
 | `test/balance_test.js` | 77 | balance passthrough + routing |
-| `test/redact_test.js` | 40 | redaction cases |
-| `test/sse_stream_test.js` | 39 | one-byte SSE fragments, CRLF/CR, EOF, whitespace-only deltas |
-| `test/panel_auth_test.js` | 31 | one-time link, session rotation, API auth |
-| `test/no_multiuser_test.js` | 20 | single-tenant behavior (accounts removed, card keys kept) |
-| `test/modelref_test.js` | 19 | composite `instance:channel:model` routing |
-| `test/path_lock_test.js` | 16 | channel `path` lock + fixed passthrough |
-| `test/sse_convert_test.js` | 16 | cross-format SSE + response redaction across fragments |
-| `test/hot_restart_test.js` | 9 | worker swap with an in-flight SSE stream |
-| `test/stats_all_test.js` | 8 | aggregate instance / model / channel stats |
+| `test/breaker_test.js` | 6 | channel circuit breaker |
+| `test/endpoint_completion_test.js` | 122 | bare base URL (no `/v1`), doubled-prefix folding, closed prefixes stay closed, auth not bypassed |
 | `test/hot_pool_test.js` | 7 | hot restart across instance ports |
-| `test/tls_single_entry_test.js` | 7 | TLS single entry — never a plaintext twin |
+| `test/hot_restart_test.js` | 9 | worker swap with an in-flight SSE stream |
+| `test/key_roles_test.js` | 23 | one-key-one-role card semantics |
+| `test/mixed_modelmap_test.js` | 3 | modelMap + models list on one channel |
+| `test/modelref_test.js` | 20 | composite `instance:channel:model` routing |
+| `test/no_multiuser_test.js` | 20 | single-tenant behavior (accounts removed, card keys kept) |
+| `test/panel_auth_test.js` | 31 | one-time link, session rotation, API auth |
+| `test/param_e2e_test.js` | 20 | same-dialect request reaches upstream verbatim while responses are masked |
+| `test/param_passthrough_test.js` | 117 | request/response parameter fidelity + redaction scope |
+| `test/path_lock_test.js` | 16 | channel `path` lock + fixed passthrough |
+| `test/plugin_protocol_test.js` | 83 | plugin manifest / signature / dispatch guards |
+| `test/plugins_e2e_test.js` | 23 | plugins over real HTTP |
+| `test/plugins_migrated_test.js` | 18 | migrated balance / probe / legacy-import plugins |
+| `test/random_route_test.js` | 4 | opt-in random routing (order-based, not a 7%-flaky split check) |
+| `test/redact_test.js` | 40 | redaction cases |
 | `test/session_persist_test.js` | 6 | panel session persistence |
+| `test/sse_convert_test.js` | 16 | cross-format SSE + response redaction across fragments |
+| `test/sse_stream_test.js` | 39 | one-byte SSE fragments, CRLF/CR, EOF, whitespace-only deltas |
+| `test/stats_all_test.js` | 8 | aggregate instance / model / channel stats |
+| `test/sticky_test.js` | 7 | sticky routing keeps the prompt cache warm |
 | `test/tls_fail_closed_test.js` | 4 | TLS fails closed on broken certs |
+| `test/tls_single_entry_test.js` | 7 | TLS single entry — never a plaintext twin |
 | `test/utf8_split_test.js` | 4 | chunk-split decoding |
 
-**303 assertions, 0 failures** — measured on Node `v24.18.0` (Termux). The full converter matrix (all 9 dialect pairs, streaming and not) and proxy / auth / failover E2E run in the maintainer's sandbox — 215/215.
+**740 assertions, 0 failures** — measured on Node `v24.18.0` (Termux). The full converter matrix (all 9 dialect pairs, streaming and not) and proxy / auth / failover E2E run in the maintainer's sandbox — 215/215.
 
 ## License
 

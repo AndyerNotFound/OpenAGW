@@ -116,17 +116,31 @@ function buildRequestForChannel(cfg, ch, clientFormat, clientApi, canonical, bod
   // when condensing is on, even same-format requests take the canonical conversion path (otherwise the passthrough pipe would bypass it);
 // When the client API (chat/responses) and upstream API (chat/responses) differ, the conversion hub is mandatory
   const upApi = chUsesResponses(cfg, ch, clientApi) ? 'responses' : 'chat';
-  const direct = clientFormat === ch.type && clientApi === upApi && !respRedactOn(cfg, urlInfo);
+/* Two separate questions, previously fused into one flag:
+ *   - sameWire: can the request travel verbatim? (same dialect + same API surface)
+ *   - direct:   can the response travel verbatim too? (nothing to filter or rewrite)
+ * Fusing them meant enabling response redaction forced every same-format request through the
+ * canonical hub, which silently rebuilt the body and dropped whatever the hub does not model
+ * (cache_control breakpoints, thinking history, logprobs, provider-specific params ...).
+ * The request now keeps its exact shape; only the response is parsed for filtering. */
+  const sameWire = clientFormat === ch.type && clientApi === upApi;
+  const direct = sameWire && !respRedactOn(cfg, urlInfo);
   const stream = canonical.stream;
 const upstreamModel = canonical.model; // already rewritten by the caller to this channel's upstream model name
   let url, headers = {}, bodyBuf;
   const lockedPath = ch.path || null;
-  if (direct) {
+  if (sameWire) {
     if (ch.type === 'openai') {
       url = joinUrl(ch.baseUrl, lockedPath || (upApi === 'responses' ? '/v1/responses' : '/v1/chat/completions'));
       body.model = upstreamModel;
-      if (body && typeof body === 'object' && ch.maxTokens && body.max_tokens == null && body.max_completion_tokens == null) {
-body.max_tokens = Number(ch.maxTokens);   // *channel-level output cap (injected when absent): thinking models default low and run out of budget mid-markup (observed 2026-10-16)
+      if (body && typeof body === 'object' && ch.maxTokens) {
+        // *channel-level output cap (injected when absent): thinking models default low and run out of budget mid-markup (observed 2026-10-16)
+        // Responses has no `max_tokens`; injecting it there is an unknown-parameter 400.
+        if (upApi === 'responses') {
+          if (body.max_output_tokens == null && body.max_tokens == null && body.max_completion_tokens == null) body.max_output_tokens = Number(ch.maxTokens);
+        } else if (body.max_tokens == null && body.max_completion_tokens == null && body.max_output_tokens == null) {
+          body.max_tokens = Number(ch.maxTokens);
+        }
       }
       headers.authorization = 'Bearer ' + ch.apiKey;
     } else if (ch.type === 'claude') {
@@ -164,7 +178,7 @@ if (ch.maxTokens && uc.max_tokens == null && uc.max_completion_tokens == null) u
     }
   }
   if (stream) headers.accept = 'text/event-stream';
-  return { url, headers, bodyBuf, direct, stream, upApi };
+  return { url, headers, bodyBuf, direct, sameWire, stream, upApi };
 }
 
 // Handle a successful upstream response (2xx): passthrough or cross-format conversion. Extracted from the original handleChat.
