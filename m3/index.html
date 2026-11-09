@@ -373,7 +373,12 @@
             <button type="button" data-chart="daily" data-mode="line">折线图</button>
           </div>
         </div>
-        <div class="chart-box"><canvas id="st-chart-daily" height="200" role="img" aria-label="按日期用量图"></canvas></div>
+        <div class="chart-box">
+          <div class="chart-track" id="ct-track-daily" data-track="daily">
+            <div class="chart-pane"><canvas id="st-chart-daily-bar" height="200" role="img" aria-label="按日期用量图 · 柱状图"></canvas></div>
+            <div class="chart-pane"><canvas id="st-chart-daily-line" height="200" role="img" aria-label="按日期用量图 · 折线图"></canvas></div>
+          </div>
+        </div>
       </md-filled-card>
 
       <md-filled-card>
@@ -384,7 +389,12 @@
             <button type="button" data-chart="model" data-mode="pie">饼状图</button>
           </div>
         </div>
-        <div class="chart-box"><canvas id="st-chart-model" height="210" role="img" aria-label="按模型用量图"></canvas></div>
+        <div class="chart-box">
+          <div class="chart-track" id="ct-track-model" data-track="model">
+            <div class="chart-pane"><canvas id="st-chart-model-bar" height="210" role="img" aria-label="按模型用量图 · 柱状图"></canvas></div>
+            <div class="chart-pane"><canvas id="st-chart-model-pie" height="210" role="img" aria-label="按模型用量图 · 饼状图"></canvas></div>
+          </div>
+        </div>
       </md-filled-card>
 
       <md-filled-card>
@@ -395,7 +405,12 @@
             <button type="button" data-chart="dist" data-mode="pie">饼状图</button>
           </div>
         </div>
-        <div class="chart-box"><canvas id="st-chart-dist" height="210" role="img" aria-label="Token 用途分布图"></canvas></div>
+        <div class="chart-box">
+          <div class="chart-track" id="ct-track-dist" data-track="dist">
+            <div class="chart-pane"><canvas id="st-chart-dist-hbar" height="210" role="img" aria-label="Token 用途分布图 · 横向柱状图"></canvas></div>
+            <div class="chart-pane"><canvas id="st-chart-dist-pie" height="210" role="img" aria-label="Token 用途分布图 · 饼状图"></canvas></div>
+          </div>
+        </div>
       </md-filled-card>
     </section>
 

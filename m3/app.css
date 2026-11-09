@@ -603,4 +603,11 @@ md-navigation-tab md-icon[slot=active-icon]{font-variation-settings:'FILL' 1,'wg
 
 /* ============ Statistics charts (canvas) ============ */
 .chart-box{padding:4px 8px 4px}
-.chart-box canvas{display:block;width:100%;min-height:96px}
+/* Chart-type switch scrolls sideways: every view of a card is a pane of one scroll-snap track, so the
+   leaving and entering drawings stay tiled while they move (a single-canvas swap leaves a blank frame),
+   a tab click scrolls the track, and a swipe moves the tabs with it. */
+.chart-track{display:flex;overflow-x:auto;overflow-y:hidden;scroll-snap-type:x mandatory;
+  overscroll-behavior-x:contain;scrollbar-width:none}
+.chart-track::-webkit-scrollbar{display:none}
+.chart-pane{flex:0 0 100%;min-width:100%;scroll-snap-align:start;scroll-snap-stop:always}
+.chart-pane canvas{display:block;width:100%;min-height:96px}

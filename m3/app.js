@@ -944,16 +944,63 @@ function chartMode(kind){ return (Store.chartMode&&Store.chartMode[kind])||'bar'
 function syncChartTabs(){
   $$('[data-chart]').forEach(b=>b.classList.toggle('on', b.dataset.mode===chartMode(b.dataset.chart)));
 }
-function setChartMode(kind,mode){
-  Store.chartMode=Object.assign({daily:'bar',model:'bar',dist:'hbar'},Store.chartMode,{[kind]:mode});
-  try{ localStorage.setItem('agw-chart',JSON.stringify(Store.chartMode)); }catch(_){}
-  syncChartTabs(); drawAllCharts();
+// Every view of a chart is a pane of one scroll-snap track, so switching a view is a sideways scroll:
+// the two drawings stay tiled while they move, and a swipe on the chart switches it just like the tabs.
+const CHART_VIEWS={daily:['bar','line'],model:['bar','pie'],dist:['hbar','pie']};
+const chartScrollT={}, chartActiveUntil={};
+function chartCanvasId(kind,mode){ return 'st-chart-'+kind+'-'+mode; }
+function chartTrack(kind){ return $('#ct-track-'+kind); }
+function chartPaneIdx(kind){
+  const i=(CHART_VIEWS[kind]||[]).indexOf(chartMode(kind));
+  return i<0?0:i;
+}
+// Scrolls a track onto the pane of its current mode. The track width is 0 while the stats page is
+// hidden, so nothing happens until it is rendered; force ignores the "someone is scrolling" guard.
+function alignChartTrack(kind, smooth, force){
+  const tr=chartTrack(kind); if(!tr) return;
+  const w=tr.clientWidth; if(!w) return;
+  const left=chartPaneIdx(kind)*w;
+  if(Math.abs(tr.scrollLeft-left)<2) return;
+  if(!smooth && !force && chartActiveUntil[kind]>Date.now()) return;
+  if(smooth && !reducedMotion()){
+    chartActiveUntil[kind]=Date.now()+500;
+    try{ tr.scrollTo({left, behavior:'smooth'}); return; }catch(_){}
+  }
+  tr.scrollLeft=left;
+}
+function alignChartTracks(smooth, force){ for(const k in CHART_VIEWS) alignChartTrack(k, smooth, force); }
+function drawChart(kind, mode){
+  const c=Store.charts; if(!c) return;
+  const id=chartCanvasId(kind,mode);
+  if(kind==='daily') drawDailyChart(c.daily||[], mode, id);
+  else if(kind==='model') drawModelChart(c.models||[], mode, id);
+  else drawDistChart(c.dist||[], mode, id);
 }
 function drawAllCharts(){
-  const c=Store.charts; if(!c) return;
-  drawDailyChart(c.daily||[], chartMode('daily'));
-  drawModelChart(c.models||[], chartMode('model'));
-  drawDistChart(c.dist||[], chartMode('dist'));
+  for(const k in CHART_VIEWS) for(const m of CHART_VIEWS[k]) drawChart(k,m);
+}
+function saveChartMode(kind,mode){
+  Store.chartMode=Object.assign({daily:'bar',model:'bar',dist:'hbar'},Store.chartMode,{[kind]:mode});
+  try{ localStorage.setItem('agw-chart',JSON.stringify(Store.chartMode)); }catch(_){}
+  syncChartTabs();
+}
+function setChartMode(kind,mode){
+  if(chartMode(kind)!==mode) saveChartMode(kind,mode);
+  alignChartTrack(kind, true);
+}
+// A swipe settles on a pane: mirror the pane that landed back into the tabs and the saved mode.
+function onChartScroll(ev){
+  const tr=ev.currentTarget, kind=tr.dataset.track; if(!kind) return;
+  chartActiveUntil[kind]=Date.now()+500;
+  clearTimeout(chartScrollT[kind]);
+  chartScrollT[kind]=setTimeout(()=>{
+    const w=tr.clientWidth; if(!w) return;
+    const mode=(CHART_VIEWS[kind]||[])[Math.round(tr.scrollLeft/w)];
+    if(mode && chartMode(kind)!==mode) saveChartMode(kind,mode);
+  },140);
+}
+function bindChartTracks(){
+  $$('.chart-track').forEach(tr=>tr.addEventListener('scroll', onChartScroll, {passive:true}));
 }
 async function renderStats(){
   if(Store._stBusy) return;
@@ -988,7 +1035,7 @@ async function renderStats(){
     const daily=Object.entries(s.daily||{}).sort((x,y)=>x[0].localeCompare(y[0])).slice(-14)
       .map(([d,v])=>({label:String(d).slice(5),in:v.inputTokens||0,out:v.outputTokens||0}));
     Store.charts={daily, models, dist};
-    syncChartTabs(); drawAllCharts();
+    syncChartTabs(); drawAllCharts(); alignChartTracks(false);
   }catch(e){
     if(e.name==='AbortError'){ if(stTimedOut) $('#st-requests').textContent='超时'; }
     else snack(e.message,true);
@@ -1737,8 +1784,8 @@ function chartPalette(n){
 }
 
 // ---- 按日期用量: bars / line ----
-function drawDailyChart(days, mode){
-  const H=210, g=cvCtx('st-chart-daily',H); if(!g) return;
+function drawDailyChart(days, mode, id){
+  const H=210, g=cvCtx(id||'st-chart-daily-bar',H); if(!g) return;
   const {cx,w,h}=g;
   const onSurf=cssVar('--md-sys-color-on-surface-variant','#9a9a9a');
   const prim=cssVar('--md-sys-color-primary','#D0BCFF'), tert=cssVar('--md-sys-color-tertiary','#EFB8C8');
@@ -1791,15 +1838,15 @@ function drawDailyChart(days, mode){
 }
 
 // ---- 按模型用量: bars / pie ----
-function drawModelChart(rows, mode){
-  if(mode==='pie') return drawPieChart('st-chart-model', rows, {maxSlices:6});
-  return drawVBars('st-chart-model', rows, '暂无数据 (需有请求流过)');
+function drawModelChart(rows, mode, id){
+  if(mode==='pie') return drawPieChart(id, rows, {maxSlices:6});
+  return drawVBars(id, rows, '暂无数据 (需有请求流过)');
 }
 
 // ---- Token 用途分布: horizontal bars / pie ----
-function drawDistChart(rows, mode){
-  if(mode==='pie') return drawPieChart('st-chart-dist', rows, {maxSlices:7});
-  return drawHBars('st-chart-dist', rows, '暂无分布数据 (需有请求流过)');
+function drawDistChart(rows, mode, id){
+  if(mode==='pie') return drawPieChart(id, rows, {maxSlices:7});
+  return drawHBars(id, rows, '暂无分布数据 (需有请求流过)');
 }
 
 function drawVBars(id, rows, emptyText){
@@ -2165,6 +2212,7 @@ try{ setRail(localStorage.getItem('agw-rail')==='open', false); }catch(_){ setRa
 buildNav();
 syncNav(true);
 syncChartTabs();
+bindChartTracks();
 // Never let a slow/hung first /admin/api/instances call block the whole boot:
 // render the default page after at most 6s; the per-page render has its own 20s abort guard.
 await Promise.race([
@@ -2176,7 +2224,7 @@ let chartResizeT=0;
 window.addEventListener('resize',()=>{
   clearTimeout(chartResizeT);
   chartResizeT=setTimeout(()=>{
-    if(Store.page==='stats') drawAllCharts();
+    if(Store.page==='stats'){ drawAllCharts(); alignChartTracks(false, true); }
   },150);
 });
 console.log('[OpenAGW] Material Web 面板已初始化 · 组件库', MW_OK?'就绪':'缺失');
