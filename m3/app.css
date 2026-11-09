@@ -429,13 +429,20 @@ md-assist-chip       {font-size:10px!important;
   --md-assist-chip-container-height:26px;--md-assist-chip-label-text-size:10px;--md-assist-chip-label-text-line-height:14px;--md-assist-chip-icon-size:13px}
 /* Form controls, same 80% scale as the rest of the panel:
    a default outlined field is 56px tall with 16px text, a switch is 52x32, a checkbox 18px. */
+/* Full width by default: the component host is inline-flex, so its width follows the content
+   instead of the parent (a 20-column textarea, a short label). Inside a display:block card that
+   leaves a narrow box and a big empty strip on the right. Fixed sizes still win through a
+   style="width:...px" on the element (#rt-syncInterval / #lg-lines). */
 md-outlined-text-field,md-outlined-select{
+  width:100%;max-width:100%;
   --md-outlined-field-top-space:12px;--md-outlined-field-bottom-space:12px;
   --md-outlined-field-content-size:13px;--md-outlined-field-content-line-height:19px;
   --md-outlined-field-label-text-size:10px;--md-outlined-field-label-text-populated-size:10px;
   --md-outlined-field-label-text-line-height:14px;--md-outlined-field-label-text-populated-line-height:15px;
   --md-outlined-field-supporting-text-size:9px;--md-outlined-field-supporting-text-line-height:13px;
   --md-outlined-field-leading-space:12px;--md-outlined-field-trailing-space:12px}
+/* textarea fields: drag to grow vertically only, a horizontal drag would tear the field out of the grid */
+md-outlined-text-field[type="textarea"]{resize:vertical}
 md-switch{
   --md-switch-track-width:42px;--md-switch-track-height:26px;
   --md-switch-handle-width:13px;--md-switch-handle-height:13px;
