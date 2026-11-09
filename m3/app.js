@@ -935,6 +935,20 @@ document.body.addEventListener('click', e=>{
 let dlgOnOk = null;
 let mmList=[]; // the channel dialog's model rename map [[public name, real name],...]
 let portDlgOrigKey; // the original admin password before dialog backfill (undefined = backfill not done)
+// Drawer-style dialog: opening is pure CSS (dlgRise); closing adds .closing so the sheet slides down
+// (dlgSink) before the overlay is hidden. DLG_CLOSE_MS mirrors the .dlg-overlay.closing duration in app.css.
+const DLG_CLOSE_MS = 200;
+let dlgCloseT = 0;
+function openDlg(){
+  const ov=$('#dlgOverlay'); if(!ov) return;
+  clearTimeout(dlgCloseT); ov.classList.remove('closing'); ov.hidden=false;
+}
+function closeDlg(){
+  const ov=$('#dlgOverlay'); if(!ov || ov.hidden) return;
+  ov.classList.add('closing');
+  clearTimeout(dlgCloseT);
+  dlgCloseT=setTimeout(()=>{ ov.classList.remove('closing'); ov.hidden=true; }, reducedMotion()?0:DLG_CLOSE_MS);
+}
 function openDialog(title, bodyHtml, {okText='确定', cancel=true, onOk=null}={}){
   dlgOnOk = onOk;
   $('#dlgTitle').textContent=title;
@@ -943,7 +957,7 @@ function openDialog(title, bodyHtml, {okText='确定', cancel=true, onOk=null}={
   $('#dlgOk').textContent=okText;
   $('#dlgCancel').hidden=!cancel;
   $('#dlgFetch').hidden=true;
-  $('#dlgOverlay').hidden=false;
+  openDlg();
 // Auto-focus the first input; a failed focus must not break the dialog
   setTimeout(()=>{ try{ $('#dlgBody').querySelector('md-outlined-text-field,md-outlined-select')?.focus?.(); }catch(_){} },120);
 }
@@ -1457,7 +1471,7 @@ async function delInstance(name){
   if(!confirm('确定删除实例 '+name+' ? 将停止它并删除其配置文件, 不可恢复!')) return;
   try{
     await adapter.deleteInstance(name);
-    $('#dlgOverlay').hidden=true;
+    closeDlg();
     snack('实例 '+name+' 已删除');
     renderPorts();
   }catch(e){ snack(e.message,true); }
@@ -1724,7 +1738,7 @@ document.body.addEventListener('click', e=>{
   if(tab && tab.dataset.chart){ setChartMode(tab.dataset.chart, tab.dataset.mode); return; }
   const nav=e.target.closest('[data-page]');
   if(nav?.dataset.page){
-    if(nav.closest('#dlgBody')) $('#dlgOverlay').hidden=true;
+    if(nav.closest('#dlgBody')) closeDlg();
     if(nav.closest('#railList')) setRail(false);
     go(nav.dataset.page); return;
   }
@@ -1754,12 +1768,12 @@ $('#dlgOk').addEventListener('click', async ()=>{
   const btn=$('#dlgOk'); btn.disabled=true;
   try{
     const ok = dlgOnOk ? await dlgOnOk() : true;
-    if(ok!==false) $('#dlgOverlay').hidden=true;
+    if(ok!==false) closeDlg();
   } finally { btn.disabled=false; }
 });
-$('#dlgCancel').addEventListener('click', ()=>$('#dlgOverlay').hidden=true);
-$('#dlgX').addEventListener('click', ()=>$('#dlgOverlay').hidden=true);
-$('#dlgOverlay').addEventListener('click', e=>{ if(e.target===e.currentTarget) $('#dlgOverlay').hidden=true; });
+$('#dlgCancel').addEventListener('click', ()=>closeDlg());
+$('#dlgX').addEventListener('click', ()=>closeDlg());
+$('#dlgOverlay').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeDlg(); });
 $('#pv-add').addEventListener('click',()=>openProviderDialog());
 $('#px-add').addEventListener('click',()=>openProxyDialog());
 ['out','inc'].forEach(dir=>{
