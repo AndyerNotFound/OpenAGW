@@ -217,6 +217,25 @@ function setRail(open, save=true){
   if(save){ try{ localStorage.setItem('agw-rail', open?'open':'closed'); }catch(_){} }
 }
 function toggleRail(){ setRail(!railOpen()); }
+// Title roll: the old caption rolls out (clipped by the h1's own overflow), then the new one rolls
+// in from the opposite edge. Direction matches the page push: forward = up, back = down.
+// Durations mirror .topbar h1.t-out/.t-in in app.css — keep the two in sync.
+const TITLE_OUT_MS = 130, TITLE_IN_MS = 190;
+let titleT = 0;
+function setPageTitle(text, fwd=true){
+  const el=$('#pageTitle'); if(!el) return;
+  clearTimeout(titleT);
+  el.classList.remove('t-out','t-in','rev');
+  if(reducedMotion() || el.textContent===text){ el.textContent=text; return; }
+  const off = fwd ? [] : ['rev'];
+  el.classList.add('t-out', ...off);
+  titleT=setTimeout(()=>{
+    el.textContent=text;
+    el.classList.remove('t-out', ...off);
+    el.classList.add('t-in', ...off);
+    titleT=setTimeout(()=>el.classList.remove('t-in','rev'), TITLE_IN_MS+20);
+  }, TITLE_OUT_MS);
+}
 // Page switch: push — the leaving page slides up out while the incoming one is pushed in from below,
 // one simultaneous move with the two pages tiled (no gap, no empty frame). The old two-phase
 // animation hid the leaving page before showing the next one, and that gap was the flicker.
@@ -245,7 +264,7 @@ async function go(page){
     const fwd=viewIdx(page)>viewIdx(prev);
     // Both pages are lifted out of the flow while pushing, so reset scroll before the move starts:
     // absolute children of a scrolled container anchor to the content top, not the scrollport.
-    $('#pageTitle').textContent = TITLES[page]||page;
+    setPageTitle(TITLES[page]||page, fwd);
     if(main) main.scrollTop=0;
     // A switch that interrupted an earlier push leaves those pages mid-flight; tuck them away.
     $$('.page.push').forEach(p=>{ if(p!==prevEl && p!==nextEl) hidePageEl(p); });
@@ -259,7 +278,7 @@ async function go(page){
     clearPageFx(nextEl);
   }else{
     $$('.page').forEach(p=>{ if(p!==nextEl) hidePageEl(p); });
-    $('#pageTitle').textContent = TITLES[page]||page;
+    setPageTitle(TITLES[page]||page, viewIdx(page)>=viewIdx(prev));
     if(!same && main) main.scrollTop=0;
     showPageEl(nextEl);
   }

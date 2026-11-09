@@ -203,6 +203,18 @@ body{
   padding:8px 12px;background:var(--md-sys-color-surface);border-bottom:1px solid var(--md-sys-color-outline-variant)}
 .topbar h1{flex:1 1 auto;font-size:16px;font-weight:500;letter-spacing:.1px;min-width:0;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Title roll on page switch: the old title rolls out while the h1 box clips it, then the new one
+   rolls in — direction matches the page push (forward = up, back = down). Page-push comment lives
+   near .page.push; setPageTitle in app.js drives the two phases. */
+.topbar h1.t-out{animation:tOutUp .12s ease-in forwards}
+.topbar h1.t-in{animation:tInUp .18s cubic-bezier(.2,0,0,1)}
+.topbar h1.t-out.rev{animation-name:tOutDown}
+.topbar h1.t-in.rev{animation-name:tInDown}
+@keyframes tOutUp{to{opacity:0;transform:translateY(-100%)}}
+@keyframes tInUp{from{opacity:0;transform:translateY(100%)}}
+@keyframes tOutDown{to{opacity:0;transform:translateY(100%)}}
+@keyframes tInDown{from{opacity:0;transform:translateY(-100%)}}
+@media(prefers-reduced-motion:reduce){.topbar h1.t-out,.topbar h1.t-in{animation:none}}
 @media(max-width:600px){ .topbar{padding:6px 12px} .topbar h1{font-size:15px} }
 .main{--main-pt:12px;--main-px:12px;position:relative;flex:1;display:flex;flex-direction:column;
   overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
