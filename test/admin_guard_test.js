@@ -1,6 +1,6 @@
 'use strict';
 /* admin_guard_test.js -- guards on the admin surface:
- *  1) /admin page itself requires auth (was 200 to anyone)
+ *  1) /admin is a pure redirect to /auth now (the old inline page is gone) and /auth requires auth
  *  2) /auth/* static files are extension-whitelisted (no arbitrary m3/ files)
  *  3) /admin/api/* 401 response does not leak config hints
  * Real HTTP, same style as panel_auth_test.js */
@@ -46,14 +46,25 @@ function request(port, p, headers = {}, method = 'GET', body = null) {
   const started = await G.startServer(cfg, { host: '127.0.0.1', port: 0, multi: false });
   const port = started.port;
 
-  // ---- Hole 1: /admin page requires auth ----
+  // ---- Hole 1: /admin only redirects now; the M3 panel at /auth holds the auth gate ----
   const anonAdmin = await request(port, '/admin');
-  ok(anonAdmin.status === 401, '匿名访问 /admin 页面返回 401');
-  ok(!anonAdmin.body.includes('AI Gateway'), '401 页不含管理页面内容');
+  ok(anonAdmin.status === 302, '匿名访问 /admin 重定向到面板 (旧内联页已移除)');
+  ok((anonAdmin.headers.location || '').split('?')[0] === '/auth', '/admin 的重定向目标是 /auth');
+  ok(anonAdmin.body === '', '重定向响应不带任何页面内容');
+  const keyHop = await request(port, '/admin?key=abc123');
+  ok((keyHop.headers.location || '') === '/auth?key=abc123', '/admin 转发时保留 ?key=');
+  const headAdmin = await request(port, '/admin', {}, 'HEAD');
+  ok(headAdmin.status === 302, 'HEAD /admin 与 GET 一致返回 302');
+  const postAdmin = await request(port, '/admin', {}, 'POST', '{}');
+  ok(postAdmin.status === 405, 'POST /admin 返回 405, 不会挂住连接');
+  const anonPanel = await request(port, '/auth');
+  ok(anonPanel.status === 401, '匿名访问 /auth 面板返回 401');
+  ok(!anonPanel.body.includes('AI Gateway'), '401 页不含管理页面内容');
   const link = panelAuth.issue(cfg, 'default');
   const login = await request(port, `/auth/${link.sid}/${link.token}`);
   const cookie = (login.headers['set-cookie'] || []).map(x => x.split(';')[0]).join('; ');
-  ok((await request(port, '/admin', { cookie })).status === 200, '带会话 cookie 可访问 /admin 页面');
+  ok((await request(port, '/admin', { cookie })).status === 302, '带会话 cookie 访问 /admin 同样重定向');
+  ok((await request(port, '/auth', { cookie })).status === 200, '带会话 cookie 可访问 /auth 面板');
 
   // ---- Hole 2: /auth/* static files extension whitelist ----
   const bad = await request(port, '/auth/../admin.js');
