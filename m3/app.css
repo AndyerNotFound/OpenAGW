@@ -324,6 +324,15 @@ table.tbl{width:100%;table-layout:fixed;border-collapse:collapse;font-size:10px}
 md-filled-card{background:var(--md-sys-color-surface-container);border-radius:var(--md-sys-shape-corner-large);
   padding:14px;margin-bottom:4px;display:block}
 .list-gap{display:flex;flex-direction:column;gap:4px}
+/* Overview instance cards run as a horizontal carousel: one page = the fully visible cards
+   (3 on wide screens, 1 on phones); the ovCar* helpers in app.js advance one page per tick.
+   Scrollbar hidden on purpose — like .rail-list, touch/wheel scrolling still works. */
+#ov-inst-list{flex-direction:row;overflow-x:auto;overscroll-behavior-x:contain;
+  scroll-snap-type:x mandatory;scroll-behavior:smooth;scrollbar-width:none;-ms-overflow-style:none}
+#ov-inst-list::-webkit-scrollbar{width:0;height:0}
+#ov-inst-list>*{flex:0 0 100%;scroll-snap-align:start;min-width:0}
+@media(min-width:601px){ #ov-inst-list>.card-item{flex-basis:calc((100% - 8px)/3)} }
+@media(prefers-reduced-motion:reduce){#ov-inst-list{scroll-behavior:auto}}
 
 /* ============ Card item: head (name) / body (details) / foot (actions) ============
    md-list-item put 3-4 action buttons in the end slot, so on a 400px phone the supporting text was

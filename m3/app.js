@@ -260,6 +260,7 @@ async function go(page){
   Store.page=page;
   syncNav();
   Store.clearRefresh();
+  if(page!=='overview') ovCarStop();
   if(!same && prevEl && nextEl && !prevEl.hidden && !reducedMotion()){
     const fwd=viewIdx(page)>viewIdx(prev);
     // Both pages are lifted out of the flow while pushing, so reset scroll before the move starts:
@@ -397,6 +398,28 @@ function cardItem({dot='', name='', tags='', state='', stateCls='', tail='', lin
   </div>`;
 }
 
+// ============ Overview: instance-card carousel ============
+// Advances one page per tick — a page is the number of fully visible cards (3 on wide screens,
+// 1 on phones) — and wraps to the start at the end. Paused while the pointer rests on the list
+// or the tab is hidden. OV_CAR_MS is the tick interval.
+const OV_CAR_MS = 4000;
+let ovCarTimer=null;
+function ovCarTick(){
+  const list=$('#ov-inst-list'); if(!list) return;
+  const card=list.querySelector('.card-item'); if(!card) return;
+  const gap=parseFloat(getComputedStyle(list).columnGap)||0;
+  const w=card.getBoundingClientRect().width+gap; if(w<=0) return;
+  const per=Math.max(1,Math.round(list.clientWidth/w));
+  const cards=list.querySelectorAll('.card-item').length;
+  if(cards<=per) return;
+  const max=list.scrollWidth-list.clientWidth;
+  const left=list.scrollLeft>=max-1 ? 0 : Math.min(list.scrollLeft+w*per, max);
+  list.scrollTo({left});
+}
+function ovCarStart(){ if(ovCarTimer) return; if(reducedMotion()) return;
+  ovCarTimer=setInterval(()=>{ if(!document.hidden && !Store._ovHover) ovCarTick(); }, OV_CAR_MS); }
+function ovCarStop(){ if(ovCarTimer){ clearInterval(ovCarTimer); ovCarTimer=null; } }
+
 // ============ Render: overview ============
 async function renderOverview(){
   if(Store._ovBusy) return;
@@ -433,7 +456,9 @@ async function renderOverview(){
     $('#ov-hitrate').textContent=inTok?((cached/inTok)*100).toFixed(1)+'%':'-';
     $('#ov-models').textContent=models.size||'-';
     $('#ov-uptime').textContent=fmtDur(maxUp);
-    $('#ov-inst-list').innerHTML=instances.map(i=>cardItem({
+    const ovList=$('#ov-inst-list');
+    const ovLeft=ovList.scrollLeft;  // keep the carousel position across the 5s refresh
+    ovList.innerHTML=instances.map(i=>cardItem({
       dot:i.running?'ok':'err',
       name:i.name,
       tags:i.tlsOn?'<span class="tag default">TLS</span>':'',
@@ -443,6 +468,8 @@ async function renderOverview(){
       lines:[`端口 <b>${esc(i.port)}</b> · ${esc(i.chCount)} 渠道`],
       data:'data-goto="ports"',
     })).join('');
+    ovList.scrollLeft=Math.min(ovLeft, ovList.scrollWidth-ovList.clientWidth);
+    ovCarStart();
 // Recent log lines of the instance picked in the top bar (falls back to the panel host)
     const logInst=(Store.inst && instances.some(i=>i.name===Store.inst)) ? Store.inst : (current || instances[0]?.name || '');
     const lb=$('#ov-log');
@@ -1844,6 +1871,8 @@ $('#lg-rec-server').addEventListener('focusout',saveRecCfg);
 $('#lg-rec-server').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.isComposing) saveRecCfg(); });
 $('#lg-refresh').addEventListener('click',renderLogs);
 $('#ov-log-refresh').addEventListener('click',renderOverview);
+$('#ov-inst-list').addEventListener('pointerenter',()=>{ Store._ovHover=true; });
+$('#ov-inst-list').addEventListener('pointerleave',()=>{ Store._ovHover=false; });
 $('#refreshBtn').addEventListener('click',()=>{ go(Store.page); });
 $('#refreshBtn').addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ go(Store.page); } });
 $('#topInst').addEventListener('change', e=>{ Store.inst=e.target.value; go(Store.page); });
