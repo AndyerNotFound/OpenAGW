@@ -143,8 +143,6 @@ body{
 .rail-brand{display:flex;align-items:center;gap:8px;min-width:0;flex:1 1 auto;overflow:hidden;white-space:nowrap;
   padding:6px 0;border-radius:12px;cursor:pointer}
 .rail-brand:hover{background:var(--md-sys-color-surface-container-high)}
-.rail-brand .logo{width:32px;height:32px;border-radius:10px;background:var(--md-sys-color-primary-container);
-  color:var(--md-sys-color-on-primary-container);display:grid;place-items:center;font-size:16px;flex:none}
 .rail-brand-txt{min-width:0;overflow:hidden}
 .rail-brand .name{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rail-brand .ver{font-size:9px;color:var(--md-sys-color-on-surface-variant);white-space:nowrap}
@@ -195,12 +193,22 @@ body{
 /* ============ Main area ============ */
 /* The main view is pushed, not squeezed: its width stays (viewport - collapsed rail) and the whole
    panel is translated right, so widening the rail slides it away instead of reflowing every card. */
-.shell{position:fixed;top:0;bottom:0;left:0;width:calc(100% - 56px);display:flex;flex-direction:column;min-width:0;
+.shell{--topbar-h:48px;position:fixed;top:0;bottom:0;left:0;width:calc(100% - 56px);display:flex;flex-direction:column;min-width:0;
   transform:translateX(56px);transition:transform .3s cubic-bezier(.2,0,0,1)}
 #rail[data-open="true"] ~ .shell{transform:translateX(236px)}
 @media(prefers-reduced-motion:reduce){.shell{transition:none}}
-.topbar{display:flex;align-items:center;gap:4px;flex-shrink:0;
-  padding:8px 12px;background:var(--md-sys-color-surface);border-bottom:1px solid var(--md-sys-color-outline-variant)}
+/* Topbar: gradient glass. It overlays the main scroller (absolute), so scrolled content passes
+   beneath the blur. --topbar-h (on .shell) is consumed by .main's top padding and .page.push's top,
+   keeping normal content and pushed pages aligned below the bar. */
+.topbar{position:absolute;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;gap:4px;
+  padding:8px 12px;border-bottom:1px solid var(--md-sys-color-outline-variant);
+  background:linear-gradient(to bottom,
+    color-mix(in srgb, var(--md-sys-color-surface) 85%, transparent),
+    color-mix(in srgb, var(--md-sys-color-surface) 55%, transparent) 70%,
+    color-mix(in srgb, var(--md-sys-color-surface) 15%, transparent));
+  backdrop-filter:blur(14px) saturate(1.4);-webkit-backdrop-filter:blur(14px) saturate(1.4)}
+.topbar md-icon-button{--md-icon-button-container-height:30px;--md-icon-button-container-width:30px;
+  --md-icon-button-icon-size:18px;flex:none;color:var(--md-sys-color-on-surface-variant)}
 .topbar h1{flex:1 1 auto;font-size:16px;font-weight:500;letter-spacing:.1px;min-width:0;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Title roll on page switch: the old title rolls out while the h1 box clips it, then the new one
@@ -215,10 +223,11 @@ body{
 @keyframes tOutDown{to{opacity:0;transform:translateY(100%)}}
 @keyframes tInDown{from{opacity:0;transform:translateY(-100%)}}
 @media(prefers-reduced-motion:reduce){.topbar h1.t-out,.topbar h1.t-in{animation:none}}
-@media(max-width:600px){ .topbar{padding:6px 12px} .topbar h1{font-size:15px} }
+@media(max-width:600px){ .shell{--topbar-h:44px} .topbar{padding:6px 12px} .topbar h1{font-size:15px} }
 .main{--main-pt:12px;--main-px:12px;position:relative;flex:1;display:flex;flex-direction:column;
   overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
-  padding:var(--main-pt) var(--main-px);padding-bottom:calc(var(--main-pt) + env(safe-area-inset-bottom))}
+  padding:calc(var(--main-pt) + var(--topbar-h,48px)) var(--main-px);
+  padding-bottom:calc(var(--main-pt) + env(safe-area-inset-bottom))}
 .page{flex:0 0 auto}
 /* Page switch: push — the leaving page slides up out while the incoming one is pushed in from below,
    one simultaneous move, so the two pages stay tiled with no empty frame between them (the old
@@ -227,7 +236,7 @@ body{
    (absolute) and clipped to the scrollport during the move, so one full viewport-height slide carries
    each page fully in/out regardless of its content height; --main-pt/--main-px keep them aligned with
    normal-flow content. PAGE_PUSH_MS in app.js mirrors the duration. */
-.page.push{position:absolute;top:var(--main-pt,12px);left:var(--main-px,12px);right:var(--main-px,12px);
+.page.push{position:absolute;top:calc(var(--main-pt,12px) + var(--topbar-h,48px));left:var(--main-px,12px);right:var(--main-px,12px);
   bottom:0;width:auto;overflow:hidden}
 .page.push.out{z-index:2;animation:pageOutUpP .28s cubic-bezier(.2,0,0,1) forwards;pointer-events:none}
 .page.push.in{z-index:3;animation:pageInUpP .28s cubic-bezier(.2,0,0,1);box-shadow:0 -16px 32px rgba(0,0,0,.14)}
