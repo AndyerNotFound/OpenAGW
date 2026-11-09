@@ -403,7 +403,7 @@ function cardItem({dot='', name='', tags='', state='', stateCls='', tail='', lin
 // 1 on phones) — and wraps to the start at the end. Paused while the pointer rests on the list
 // or the tab is hidden. OV_CAR_MS is the tick interval.
 const OV_CAR_MS = 4000;
-const OV_CAR_LISTS = ['#ov-inst-list','#ov-stat-list'];
+const OV_CAR_LISTS = ['#ov-inst-list','#ov-stat-list','#ov-model-list'];
 let ovCarTimer=null;
 function ovCarTickList(list){
   const card=list.querySelector('.card-item,.stat-box'); if(!card) return;
@@ -417,6 +417,17 @@ function ovCarTickList(list){
   list.scrollTo({left});
 }
 function ovCarTick(){ OV_CAR_LISTS.forEach(sel=>{ const l=$(sel); if(l) ovCarTickList(l); }); }
+// Model plaza data: channels (+ their model lists) of the managed instance, cached for 60s so the
+// 5s overview refresh does not refetch the whole config every tick.
+let plazaCache={inst:'',channels:[],at:0};
+async function plazaChannels(signal){
+  const inst=Store.inst||'default', now=Date.now();
+  if(plazaCache.inst===inst && now-plazaCache.at<60000) return plazaCache.channels;
+  const cfg=await adapter.getConfig(inst,signal);
+  const channels=(cfg&&cfg.channels||[]).map(c=>({name:c.name,models:(c.models||[]).filter(Boolean)})).filter(c=>c.models.length);
+  plazaCache={inst,channels,at:now};
+  return channels;
+}
 function ovCarStart(){ if(ovCarTimer) return; if(reducedMotion()) return;
   ovCarTimer=setInterval(()=>{ if(!document.hidden && !Store._ovHover) ovCarTick(); }, OV_CAR_MS); }
 function ovCarStop(){ if(ovCarTimer){ clearInterval(ovCarTimer); ovCarTimer=null; } }
@@ -483,6 +494,28 @@ async function renderOverview(){
     })).join('');
     ovList.scrollLeft=Math.min(ovLeft, ovList.scrollWidth-ovList.clientWidth);
     ovCarStart();
+// Model plaza: pages of up to 8 models, in channel order — the carousel walks one channel's pages,
+// then moves on to the next channel. Position is preserved across the 5s refresh like the inst list.
+    try{
+      const chans=await plazaChannels(signal);
+      const ml=$('#ov-model-list');
+      if(ml){
+        const mLeft=ml.scrollLeft;
+        const pages=[];
+        for(const ch of chans){
+          const pt=Math.ceil(ch.models.length/8);
+          for(let i=0;i<ch.models.length;i+=8)
+            pages.push({ch:ch.name,pi:Math.floor(i/8)+1,pt,total:ch.models.length,models:ch.models.slice(i,i+8)});
+        }
+        ml.innerHTML=pages.length?pages.map(p=>`
+          <div class="model-page">
+            <div class="model-page-head"><span class="nm">${esc(p.ch)}</span><span class="cnt">${p.pi}/${p.pt} 页 · 共 ${p.total} 个模型</span></div>
+            <div class="model-grid">${p.models.map(m=>`<span class="model-chip" title="${escAttr(m)}">${esc(m)}</span>`).join('')}</div>
+          </div>`).join('')
+          :'<div class="empty">当前实例的渠道还没有配置模型</div>';
+        ml.scrollLeft=Math.min(mLeft, ml.scrollWidth-ml.clientWidth);
+      }
+    }catch(e){ if(e.name!=='AbortError' && !$('#ov-model-list .model-page')) $('#ov-model-list').innerHTML='<div class="empty">模型列表读取失败: '+esc(e.message)+'</div>'; }
 // Recent log lines of the instance picked in the top bar (falls back to the panel host)
     const logInst=(Store.inst && instances.some(i=>i.name===Store.inst)) ? Store.inst : (current || instances[0]?.name || '');
     const lb=$('#ov-log');

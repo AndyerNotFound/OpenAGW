@@ -348,6 +348,19 @@ md-filled-card{background:var(--md-sys-color-surface-container);border-radius:va
   display:flex;flex-direction:column;gap:2px}
 .about-lines b{color:var(--md-sys-color-on-surface);font-variant-numeric:tabular-nums}
 
+/* Model plaza: one .model-page = up to 8 chips of one channel (4x2 on wide screens, 2x4 on phones);
+   the ovCar carousel advances page by page, channel by channel (pages are built in channel order). */
+.model-page{display:flex;flex-direction:column;gap:6px}
+.model-page-head{display:flex;align-items:baseline;gap:6px;min-width:0}
+.model-page-head .nm{font-size:11px;font-weight:600;color:var(--md-sys-color-on-surface);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.model-page-head .cnt{font-size:9px;color:var(--md-sys-color-on-surface-variant);flex:none}
+.model-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;min-width:0}
+.model-chip{font-size:10px;line-height:16px;padding:3px 6px;border-radius:8px;text-align:center;
+  background:var(--md-sys-color-surface-container-high);color:var(--md-sys-color-on-surface-variant);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+@media(max-width:600px){ .model-grid{grid-template-columns:repeat(2,1fr)} }
+
 /* ============ Card item: head (name) / body (details) / foot (actions) ============
    md-list-item put 3-4 action buttons in the end slot, so on a 400px phone the supporting text was
    squeezed into a ~10-char column and wrapped over five lines. This card gives the details the full
