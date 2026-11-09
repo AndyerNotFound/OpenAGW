@@ -165,12 +165,18 @@ body{
 .rail-acts md-outlined-icon-button{flex:none;border-radius:50%;
   --md-outlined-icon-button-container-height:29px;--md-outlined-icon-button-container-width:29px;
   --md-outlined-icon-button-container-shape:9999px;--md-outlined-icon-button-icon-size:16px}
-.rail-list{display:flex;flex-direction:column;gap:2px;padding:2px 6px 12px;flex:1 1 auto;min-height:0;
+.rail-list{position:relative;display:flex;flex-direction:column;gap:2px;padding:2px 6px 12px;flex:1 1 auto;min-height:0;
   overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain}
 /* Scrollbar hidden on purpose: a classic (space-taking) scrollbar would shrink the collapsed items below
    44px and break the width==height square. Touch and wheel scrolling still work. */
 .rail-list{scrollbar-width:none;-ms-overflow-style:none}
 .rail-list::-webkit-scrollbar{width:0;height:0}
+/* Sliding highlight: one absolutely-positioned pill under the items instead of per-item backgrounds,
+   so switching pages glides the highlight to the target item (0.2s) instead of snapping. */
+.rail-glider{position:absolute;left:6px;right:6px;top:0;height:44px;border-radius:999px;z-index:0;
+  background:var(--md-sys-color-secondary-container);pointer-events:none;opacity:0;
+  transition:transform .2s cubic-bezier(.2,0,0,1),opacity .15s ease;will-change:transform}
+@media(prefers-reduced-motion:reduce){.rail-glider{transition:none}}
 .rail-item{display:flex;align-items:center;gap:10px;width:100%;height:44px;flex:none;padding:0 12px;
   border:none;border-radius:999px;background:transparent;color:var(--md-sys-color-on-surface-variant);
   cursor:pointer;font-size:11px;font-family:inherit;text-align:left;overflow:hidden;white-space:nowrap}
@@ -178,7 +184,9 @@ body{
 .rail-item .msym{font-size:20px;width:20px;flex:none;text-align:center}
 .rail-item .lbl{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;opacity:1;transition:opacity .18s ease}
 .rail[data-open="false"] .rail-item .lbl{opacity:0}
-.rail-item[active]{background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container);font-weight:600}
+.rail-item{position:relative;z-index:1}
+.rail-item[active]{background:transparent;color:var(--md-sys-color-on-secondary-container);font-weight:600}
+.rail-item[active]:hover{background:transparent}
 /* Scrim: dims everything outside the rail while it is expanded; a tap collapses the rail again */
 .rail-scrim{position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.38);opacity:0;pointer-events:none;
   transition:opacity .3s cubic-bezier(.2,0,0,1)}

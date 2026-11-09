@@ -182,13 +182,26 @@ let adapter = new HttpAdapter();
 // ============ Navigation ============
 function buildNav(){
 // Sidebar items are custom buttons: md-list-item's line-height/spacing misbehaves on some screens
+// The active highlight is one sliding pill (rail-glider) under the items, not per-item backgrounds:
+// switching pages glides it to the target item instead of snapping (see .rail-glider in app.css).
   $('#railList').innerHTML = VIEWS.map(v=>
     `<button type="button" class="rail-item" data-page="${v.id}" title="${escAttr(v.label)}" ${v.id===Store.page?'active':''}>
        <span class="msym" aria-hidden="true">${v.icon}</span><span class="lbl">${v.label}</span>
-     </button>`).join('');
+     </button>`).join('') + '<span class="rail-glider" id="railGlider" aria-hidden="true"></span>';
 }
-function syncNav(){
+function syncNav(instant){
   $$('#railList .rail-item').forEach(el=>el.toggleAttribute('active', el.dataset.page===Store.page));
+  moveRailGlider(instant);
+}
+// instant=true skips the slide (first paint); offsetTop is layout-relative, so it scrolls with the list.
+function moveRailGlider(instant){
+  const g=$('#railGlider'); if(!g) return;
+  const act=$('#railList .rail-item[active]');
+  if(!act){ g.style.opacity='0'; return; }
+  if(instant) g.style.transition='none';
+  g.style.transform=`translateY(${act.offsetTop}px)`;
+  g.style.opacity='1';
+  if(instant){ void g.offsetWidth; g.style.transition=''; }
 }
 // ============ Sidebar open / close ============
 // Collapsed = 56px icon rail: every item ends up 44x44, the label is clipped away and only the icon shows.
@@ -1844,6 +1857,7 @@ loadTheme();
 try{ const cm=JSON.parse(localStorage.getItem('agw-chart')||'null'); if(cm) Store.chartMode=Object.assign(Store.chartMode,cm); }catch(_){}
 try{ setRail(localStorage.getItem('agw-rail')==='open', false); }catch(_){ setRail(false, false); }
 buildNav();
+syncNav(true);
 syncChartTabs();
 // Never let a slow/hung first /admin/api/instances call block the whole boot:
 // render the default page after at most 6s; the per-page render has its own 20s abort guard.
