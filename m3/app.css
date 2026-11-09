@@ -204,26 +204,31 @@ body{
 .topbar h1{flex:1 1 auto;font-size:16px;font-weight:500;letter-spacing:.1px;min-width:0;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media(max-width:600px){ .topbar{padding:6px 12px} .topbar h1{font-size:15px} }
-.main{flex:1;display:flex;flex-direction:column;overflow-y:auto;-webkit-overflow-scrolling:touch;
-  overscroll-behavior:contain;padding:12px;padding-bottom:calc(12px + env(safe-area-inset-bottom))}
-.page{flex:0 0 auto;--page-rise:18vh}
-/* Page switch: the leaving page slides up out of the main area, then the next page rises from below. */
-.page.is-out{animation:pageOutUp .16s cubic-bezier(.4,0,1,1) forwards;pointer-events:none}
-.page.is-in{animation:pageInUp .24s cubic-bezier(.2,0,0,1) both}
-@keyframes pageOutUp{
-  0%{opacity:1;transform:translateY(0)}
-  55%{opacity:1}
-  100%{opacity:0;transform:translateY(calc(-1 * var(--page-rise,18vh)))}
-}
-@keyframes pageInUp{
-  0%{opacity:0;transform:translateY(var(--page-rise,18vh))}
-  45%{opacity:1}
-  100%{opacity:1;transform:translateY(0)}
-}
-@media(prefers-reduced-motion:reduce){.page.is-out,.page.is-in{animation:none}}
-@media(min-width:840px){ .main{padding:16px 20px} }
+.main{--main-pt:12px;--main-px:12px;position:relative;flex:1;display:flex;flex-direction:column;
+  overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+  padding:var(--main-pt) var(--main-px);padding-bottom:calc(var(--main-pt) + env(safe-area-inset-bottom))}
+.page{flex:0 0 auto}
+/* Page switch: push — the leaving page slides up out while the incoming one is pushed in from below,
+   one simultaneous move, so the two pages stay tiled with no empty frame between them (the old
+   two-phase animation flashed an empty main area between hide and show). Direction follows the
+   sidebar order: down the list pushes up, back up pushes down. Both pages are lifted out of the flow
+   (absolute) and clipped to the scrollport during the move, so one full viewport-height slide carries
+   each page fully in/out regardless of its content height; --main-pt/--main-px keep them aligned with
+   normal-flow content. PAGE_PUSH_MS in app.js mirrors the duration. */
+.page.push{position:absolute;top:var(--main-pt,12px);left:var(--main-px,12px);right:var(--main-px,12px);
+  bottom:0;width:auto;overflow:hidden}
+.page.push.out{z-index:2;animation:pageOutUpP .28s cubic-bezier(.2,0,0,1) forwards;pointer-events:none}
+.page.push.in{z-index:3;animation:pageInUpP .28s cubic-bezier(.2,0,0,1);box-shadow:0 -16px 32px rgba(0,0,0,.14)}
+.page.push.out.rev{animation-name:pageOutDownP}
+.page.push.in.rev{animation-name:pageInDownP;box-shadow:0 16px 32px rgba(0,0,0,.14)}
+@keyframes pageOutUpP{to{transform:translateY(-100%)}}
+@keyframes pageInUpP{from{transform:translateY(100%)}}
+@keyframes pageOutDownP{to{transform:translateY(100%)}}
+@keyframes pageInDownP{from{transform:translateY(-100%)}}
+@media(prefers-reduced-motion:reduce){.page.push.out,.page.push.in{animation:none}}
+@media(min-width:840px){ .main{--main-pt:16px;--main-px:20px;padding:16px 20px} }
 /* Wide/large screens: cap content width and center instead of filling the monitor */
-@media(min-width:1200px){ .page{max-width:1080px;width:100%;margin:0 auto} .main{padding:20px 24px} }
+@media(min-width:1200px){ .page{max-width:1080px;width:100%;margin:0 auto} .main{--main-pt:20px;--main-px:24px;padding:20px 24px} }
 @media(min-width:1800px){ .page{max-width:1280px} }
 
 /* ============ Structural parts Material Web does not provide ============ */

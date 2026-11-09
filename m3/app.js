@@ -217,18 +217,21 @@ function setRail(open, save=true){
   if(save){ try{ localStorage.setItem('agw-rail', open?'open':'closed'); }catch(_){} }
 }
 function toggleRail(){ setRail(!railOpen()); }
-// Page switch: the leaving page slides up out of the main area, then the next page rises from below.
-// PAGE_OUT_MS mirrors the .page.is-out animation in app.css — keep the two in sync.
-const PAGE_OUT_MS = 190;
+// Page switch: push — the leaving page slides up out while the incoming one is pushed in from below,
+// one simultaneous move with the two pages tiled (no gap, no empty frame). The old two-phase
+// animation hid the leaving page before showing the next one, and that gap was the flicker.
+// Direction follows the sidebar order: down the list pushes up, back up pushes down.
+// PAGE_PUSH_MS mirrors the .page.push.* duration in app.css — keep the two in sync.
+const PAGE_PUSH_MS = 280;
 let navSeq = 0;
 const waitMs = ms => new Promise(r=>setTimeout(r,ms));
 function reducedMotion(){ try{ return matchMedia('(prefers-reduced-motion: reduce)').matches; }catch(_){ return false; } }
-function hidePageEl(el){ if(!el) return; el.classList.remove('is-out','is-in'); el.hidden=true; el.classList.add('hidden'); }
-function showPageEl(el, animate){
+function viewIdx(id){ return VIEWS.findIndex(v=>v.id===id); }
+function clearPageFx(el){ if(!el) return; el.classList.remove('push','out','in','rev','is-out','is-in'); }
+function hidePageEl(el){ if(!el) return; clearPageFx(el); el.hidden=true; el.classList.add('hidden'); }
+function showPageEl(el){
   if(!el) return;
-  el.hidden=false; el.classList.remove('hidden','is-out');
-  if(!animate){ el.classList.remove('is-in'); return; }
-  el.classList.remove('is-in'); void el.offsetWidth; el.classList.add('is-in');
+  clearPageFx(el); el.hidden=false; el.classList.remove('hidden');
 }
 async function go(page){
   if(!VIEWS.some(v=>v.id===page)) return;
@@ -238,21 +241,27 @@ async function go(page){
   Store.page=page;
   syncNav();
   Store.clearRefresh();
-  // The leaving page keeps its place in the flow while it rises, so the main area does not collapse mid-transition.
   if(!same && prevEl && nextEl && !prevEl.hidden && !reducedMotion()){
-    prevEl.classList.remove('is-in');
-    prevEl.classList.add('is-out');
-    await waitMs(PAGE_OUT_MS);
-    if(seq!==navSeq){ if(prevEl.classList.contains('is-out')) hidePageEl(prevEl); return; }  // a later switch took over
-    hidePageEl(prevEl);
+    const fwd=viewIdx(page)>viewIdx(prev);
+    // Both pages are lifted out of the flow while pushing, so reset scroll before the move starts:
+    // absolute children of a scrolled container anchor to the content top, not the scrollport.
     $('#pageTitle').textContent = TITLES[page]||page;
     if(main) main.scrollTop=0;
-    showPageEl(nextEl, true);
+    // A switch that interrupted an earlier push leaves those pages mid-flight; tuck them away.
+    $$('.page.push').forEach(p=>{ if(p!==prevEl && p!==nextEl) hidePageEl(p); });
+    clearPageFx(prevEl); clearPageFx(nextEl);
+    prevEl.classList.add('push','out', ...(fwd?[]:['rev']));
+    nextEl.hidden=false; nextEl.classList.remove('hidden');
+    nextEl.classList.add('push','in', ...(fwd?[]:['rev']));
+    await waitMs(PAGE_PUSH_MS);
+    if(seq!==navSeq) return;  // a later switch took over and does the cleanup
+    hidePageEl(prevEl);
+    clearPageFx(nextEl);
   }else{
     $$('.page').forEach(p=>{ if(p!==nextEl) hidePageEl(p); });
     $('#pageTitle').textContent = TITLES[page]||page;
     if(!same && main) main.scrollTop=0;
-    showPageEl(nextEl, false);
+    showPageEl(nextEl);
   }
   if(page==='overview') Store.startRefresh(()=>{ if(Store.page==='overview' && !Store._ovBusy) renderOverview(); },5000);
   else if(page==='stats') Store.startRefresh(()=>{ if(Store.page==='stats' && !Store._stBusy) renderStats(); },5000);
