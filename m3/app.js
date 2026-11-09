@@ -2010,6 +2010,7 @@ $('#railToggle').addEventListener('click',toggleRail);
 $('#railScrim').addEventListener('click',()=>setRail(false));
 document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&railOpen()) setRail(false); });
 $('#thBtn').addEventListener('click',openThemeDialog);
+$('#bgBtn').addEventListener('click',openBgDialog);
 // ?key=<webToken> one-click token access: store in localStorage and scrub from the address bar
 try{
   const u=new URL(location.href);
@@ -2020,6 +2021,71 @@ try{
   }
 }catch(_){}
 upgradePwFields(document.body);
+// ---- Dynamic background: aurora / uploaded image (stored in localStorage, per device) ----
+// The image is downscaled to <=1440px JPEG before storing: photos are far larger than localStorage
+// and would throw QuotaExceededError otherwise. It never leaves the device.
+function bgLoad(){ try{ return JSON.parse(localStorage.getItem('agw-bg')||'null')||{}; }catch(_){ return {}; } }
+function applyBg(){
+  const layer=$('#bgLayer'); if(!layer) return;
+  const st=bgLoad(), mode=st.mode||'none';
+  if(mode==='aurora'){ layer.className='aurora'; layer.style.backgroundImage=''; }
+  else if(mode==='img'&&st.img){ layer.className='img'; layer.style.backgroundImage=`url(${st.img})`; }
+  else { layer.className=''; layer.style.backgroundImage=''; }
+}
+function bgStoreImage(dataUrl){
+  const img=new Image();
+  img.onload=()=>{
+    try{
+      const max=1440, sc=Math.min(1,max/Math.max(img.width,img.height));
+      const c=document.createElement('canvas');
+      c.width=Math.max(1,Math.round(img.width*sc)); c.height=Math.max(1,Math.round(img.height*sc));
+      c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+      const out=c.toDataURL('image/jpeg',.82);
+      const st=bgLoad(); st.mode='img'; st.img=out;
+      localStorage.setItem('agw-bg',JSON.stringify(st));
+      applyBg();
+      const hint=$('#bgFileHint'); if(hint) hint.textContent=`已上传并预览 (${Math.round(out.length/1024)}KB)`;
+    }catch(e){ snack('图片处理失败: '+e.message,true); }
+  };
+  img.onerror=()=>snack('图片无法读取',true);
+  img.src=dataUrl;
+}
+function openBgDialog(){
+  const st=bgLoad(), mode=st.mode||'none';
+  openDialog('动态背景', `<div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
+    <md-outlined-select data-f="bgmode" label="背景模式">
+      <md-option value="none">默认渐变</md-option>
+      <md-option value="aurora">七色流光</md-option>
+      <md-option value="img">自定义图片</md-option>
+    </md-outlined-select>
+    <div style="display:flex;gap:6px;align-items:center;min-width:0">
+      <input type="file" id="bgFile" accept="image/*" style="font-size:10px;min-width:0;max-width:100%">
+    </div>
+    <div id="bgFileHint" style="font-size:9px;color:var(--md-sys-color-on-surface-variant)">${st.img?'已设置图片':'未上传图片'}</div>
+    <div style="font-size:9px;color:var(--md-sys-color-on-surface-variant)">图片仅保存在本设备浏览器中, 不会上传到网关</div>
+  </div>`, {okText:'应用', onOk:()=>{
+    const v=dlgValue();
+    const m=String(v.bgmode||'none');
+    if(m==='img'&&!st.img){ snack('请先选择一张图片',true); return false; }
+    try{
+      const cur=bgLoad(); cur.mode=m;
+      if(m!=='img') delete cur.img;
+      localStorage.setItem('agw-bg',JSON.stringify(cur));
+    }catch(e){ snack('保存失败: '+e.message,true); return false; }
+    applyBg(); snack('背景已更新'); return true;
+  }});
+  setTimeout(()=>{ const sel=$('#dlgBody md-outlined-select'); if(sel) sel.value=mode; },80);
+}
+document.body.addEventListener('change', e=>{
+  if(e.target&&e.target.id==='bgFile'){
+    const f=e.target.files&&e.target.files[0]; if(!f) return;
+    const r=new FileReader();
+    r.onload=()=>bgStoreImage(String(r.result||''));
+    r.onerror=()=>snack('图片读取失败',true);
+    r.readAsDataURL(f);
+  }
+});
+
 // ---- Custom brand name (edit via the brand area top-left; stored in localStorage, per device) ----
 let brandState={name:'OpenAGW',ver:'Material Web v2.11'};
 function applyBrand(b){
@@ -2046,6 +2112,7 @@ function openBrandDialog(){
 loadBrand();
 $('#railBrand').addEventListener('click', openBrandDialog);
 loadTheme();
+applyBg();
 try{ const cm=JSON.parse(localStorage.getItem('agw-chart')||'null'); if(cm) Store.chartMode=Object.assign(Store.chartMode,cm); }catch(_){}
 try{ setRail(localStorage.getItem('agw-rail')==='open', false); }catch(_){ setRail(false, false); }
 buildNav();

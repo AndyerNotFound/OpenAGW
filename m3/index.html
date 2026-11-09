@@ -13,6 +13,9 @@
 
 <div class="compat-bar" id="compatBar" role="alert"></div>
 
+<!-- Background layer: aurora (animated 7-color conic) or a user-uploaded image; behind all content -->
+<div id="bgLayer" aria-hidden="true"></div>
+
 <!-- ============ Sidebar: collapsed = icon rail, expanded = drawer + scrim ============ -->
 <aside class="rail" id="rail" data-open="false" aria-label="主导航">
   <div class="rail-head">
@@ -29,6 +32,7 @@
       <md-outlined-icon-button id="refreshBtn" aria-label="刷新" title="刷新"><md-icon>refresh</md-icon></md-outlined-icon-button>
       <md-outlined-icon-button id="keyBtn" aria-label="管理密码" title="管理密码"><md-icon>key</md-icon></md-outlined-icon-button>
       <md-outlined-icon-button id="thBtn" aria-label="主题" title="主题"><md-icon>palette</md-icon></md-outlined-icon-button>
+      <md-outlined-icon-button id="bgBtn" aria-label="背景" title="背景"><md-icon>wallpaper</md-icon></md-outlined-icon-button>
     </div>
   </div>
   <nav class="rail-list" id="railList"></nav>

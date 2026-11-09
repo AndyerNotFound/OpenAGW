@@ -572,6 +572,21 @@ md-icon{font-feature-settings:'liga';letter-spacing:normal;line-height:1;
   font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24}
 md-navigation-tab md-icon[slot=active-icon]{font-variation-settings:'FILL' 1,'wght' 400,'GRAD' 0,'opsz' 24}
 
+/* ============ Background layer: aurora / uploaded image ============ */
+/* Sits at z-index:-1: above the body's tint gradient, below all content — translucent cards and the
+   topbar glass blur it for real. Aurora is a blurred 7-color conic disc, oversized (-25%) so the
+   rotation never reveals a corner. prefers-reduced-motion freezes it. */
+#bgLayer{position:fixed;inset:0;z-index:-1;pointer-events:none;background-size:cover;background-position:center}
+#bgLayer.aurora{inset:-25%;opacity:.42;
+  background:conic-gradient(from 0deg at 50% 50%,
+    #ff4d4d,#ff9f43,#f9e547,#3ddc84,#3d8bff,#8a5cff,#e05cff,#ff4d4d);
+  filter:blur(72px) saturate(1.25);
+  animation:bgFlow 26s linear infinite}
+#bgLayer.img::after{content:'';position:absolute;inset:0;
+  background:color-mix(in srgb, var(--md-sys-color-surface-dim) 42%, transparent)}
+@keyframes bgFlow{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){#bgLayer.aurora{animation:none}}
+
 /* ============ Patches: keyboard accessibility / mobile bottom bar / in-dialog page picker ============ */
 /* Unified focus ring: custom-drawn buttons (sidebar/FAB/page grid) have no focus style of their own, so keyboard focus was invisible */
 .rail-item:focus-visible,.rail-toggle:focus-visible,.icon-act:focus-visible,.pbtn:focus-visible,
