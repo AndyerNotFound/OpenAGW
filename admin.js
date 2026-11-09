@@ -15,6 +15,7 @@ const https2 = require('https');
 const panelAuth = require('./panel-auth');
 const { isEndpointHead } = require('./endpoints');
 const { VERSION, utf8 } = require('./util');
+const { normalizeOverride } = require('./override');
 
 // cloudflared tunnel global state
 let tunnelProc = null, tunnelUrl = '', tunnelLog = [], tunnelTimer = null, tunnelNext = null;
@@ -419,6 +420,8 @@ function maskedChannels(cfg, reveal) {
 // Balance passthrough config (non-sensitive, panel-editable; default = built-in presets)
     balanceUrl: c.balanceUrl || null, balancePath: c.balancePath || null, balanceUnit: c.balanceUnit || null,
     warnBelow: c.warnBelow || null,
+    // gateway-side parameter override (non-sensitive, panel-editable)
+    paramOverride: c.paramOverride || null,
     keyPrefix: c.apiKey ? c.apiKey.slice(0, 4) + '***' : '',
     apiKey: reveal ? (c.apiKey || '') : undefined,
   }));
@@ -1327,6 +1330,7 @@ async function handleAdmin(cfg, req, res, u, p, bodyStr) {
       proxies: c.proxies || {},
       channels: maskedChannels(c, reveal),
       forceChannel: c.forceChannel || null,
+      paramOverride: c.paramOverride || null,
     });
   }
 
@@ -1403,6 +1407,17 @@ async function handleAdmin(cfg, req, res, u, p, bodyStr) {
       };
     }
     if (data.proxies !== undefined) c.proxies = data.proxies;
+// Parameter override (instance level): empty/absent-clears; otherwise a non-empty object
+    if (data.paramOverride !== undefined) {
+      const raw = data.paramOverride;
+      const isEmpty = raw === null || raw === '' || (raw && typeof raw === 'object' && !Array.isArray(raw) && !Object.keys(raw).length);
+      if (isEmpty) delete c.paramOverride;
+      else {
+        const ov = normalizeOverride(raw, '实例 paramOverride');
+        if (!ov) return jsonRes(res, 400, { error: '参数覆写必须是非空 JSON 对象' });
+        c.paramOverride = ov;
+      }
+    }
     if (Array.isArray(data.channels)) {
 // Preserve apiKey: a submitted channel with hasKey but no apiKey inherits the old value
       const oldMap = {};
@@ -1505,6 +1520,16 @@ let prevCh = null; // the previous channel object: inherits fields absent from t
     }
     ch.path = normalizeChannelPath(ch.path);
     if (!ch.path) delete ch.path;
+// Parameter override follows the path rule: omitted = inherit, explicit empty = clear
+    if (ch.paramOverride === undefined) {
+      if (prevCh && prevCh.paramOverride !== undefined) ch.paramOverride = prevCh.paramOverride;
+    } else if (ch.paramOverride === null || ch.paramOverride === '' || (typeof ch.paramOverride === 'object' && !Array.isArray(ch.paramOverride) && !Object.keys(ch.paramOverride).length)) {
+      delete ch.paramOverride;
+    } else {
+      const ov = normalizeOverride(ch.paramOverride, '渠道 "' + ch.name + '" paramOverride');
+      if (!ov) return jsonRes(res, 400, { error: '参数覆写必须是非空 JSON 对象' });
+      ch.paramOverride = ov;
+    }
     try { saveCfg(name, c); } catch (e) { return jsonRes(res, 500, { error: '保存失败: ' + e.message }); }
     if (POOL) {
       try { hotReload(name); return jsonRes(res, 200, { ok: true, hotReload: true }); }
@@ -1957,47 +1982,6 @@ if (name === currentName(cfg)) continue; // kill ourselves last
 // kill ourselves after 1s (leaves other instances time to exit gracefully)
       setTimeout(() => { try { process.kill(myPid, 'SIGTERM'); } catch (e) {} }, 1000);
     }, 500);
-    return;
-  }
-
-// POST /admin/api/chat -- chat test (proxies to the target instance's /v1/chat/completions, injects the first user card automatically, streaming passes through)
-// body may carry instance to pick the target (the panel's top-bar selection); default = this instance
-  if (req.method === 'POST' && api === 'chat') {
-    let target = cfg, bodyOut = bodyStr || '{}';
-    try {
-      const bj = JSON.parse(bodyOut);
-      const inst = bj.instance;
-      delete bj.instance;
-      bodyOut = JSON.stringify(bj);
-      if (inst && inst !== currentName(cfg)) {
-        const tc = loadCfg(inst);
-        if (!tc) return jsonRes(res, 404, { error: '实例不存在: ' + inst });
-        target = tc;
-      }
-    } catch (e) { return jsonRes(res, 500, { error: '读取目标实例配置失败: ' + e.message }); }
-    let port = (target.listen || {}).port || 16384;
-    let apiPath = '/v1/chat/completions';
-    // The panel chat test needs a user-side credential: use the first enabled user card.
-    const gwKey = ((target.apiKeys || []).find(k => k && k.role !== 'admin' && k.enable !== false) || {}).key || '';
-// Single-process mode: hit the main port's /<instance>/ prefix directly (old instance ports may no longer be open)
-    if (POOL) {
-      port = POOL.mainPort;
-      const tname = target._name || currentName(target);
-      if (tname && tname !== 'default') apiPath = '/' + tname + '/v1/chat/completions';
-    }
-    // TLS instances have no listener of their own: the request goes to the main port over HTTPS + /<name>/
-    const chatTls = ((POOL ? cfg : target).tls) || {};
-    const chatUseTls = POOL ? !!(cfg.tls && cfg.tls.enable) : !!chatTls.enable;
-    const opts = { host: '127.0.0.1', port, path: apiPath, method: 'POST', headers: { 'Content-Type': 'application/json' } };
-if (chatUseTls) opts.rejectUnauthorized = false; // signed by the private CA
-    if (gwKey) opts.headers['authorization'] = 'Bearer ' + gwKey;
-    const up = (chatUseTls ? https2 : http).request(opts, upRes => {
-      res.writeHead(upRes.statusCode, { 'Content-Type': upRes.headers['content-type'] || 'application/json', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS' });
-      upRes.pipe(res);
-    });
-    up.on('error', (e) => { try { jsonRes(res, 502, { error: '目标实例不可达(端口 ' + port + '): ' + e.message }); } catch (_) {} });
-    up.write(bodyOut);
-    up.end();
     return;
   }
 

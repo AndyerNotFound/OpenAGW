@@ -23,6 +23,10 @@ const $  = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const escAttr = s => esc(s).replace(/\s/g,' ');
+const stripTags = s => String(s==null?'':s).replace(/<[^>]+>/g,'');
+// esc() already turned & < > " into entities; a title= built from that escaped markup would show "&amp;amp;"
+// on hover. Decode the same five entities first, then let escAttr() encode exactly once.
+const unesc = s => String(s==null?'':s).replace(/&(amp|lt|gt|quot|#39);/g, (m,e)=>({amp:'&',lt:'<',gt:'>',quot:'"','#39':"'"}[e]));
 const fmtNum = n => n?.toLocaleString?.() ?? '-';
 const fmtDur = s => { if(!s||s<0)return '-'; const h=Math.floor(s/3600),m=Math.floor(s%3600/60); return h?`${h}h${m}m`:`${m}m`; };
 //// abbreviated Base URL: strip the scheme and trailing /v1 to fit ~40% more useful info at the same width; the full value goes in title
@@ -37,6 +41,34 @@ function snack(msg, isErr=false){
   clearTimeout(el._t);
   el._t=setTimeout(()=>el.classList.remove('show'), isErr?4000:2000);
 }
+
+// ============ Dropdown: truncate the selected value ============
+// md-outlined-select prints the current value into a shadow-DOM #label node that exposes no ::part and no
+// token of its own, so a long instance/model name wraps and makes the field taller. Inject the rule once per
+// element, then keep title= in sync so the full value is still readable on hover.
+const SEL_LABEL_CSS='#label{display:block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
+  +'md-menu{min-width:max(var(--__menu-min-width,0px),240px)!important;max-width:calc(100vw - 24px)!important}';
+function selLabelText(el){
+  const o=[...el.querySelectorAll('md-select-option')].find(x=>x.value===el.value);
+  return (o?o.textContent.trim():'')||el.value||'';
+}
+function patchSelect(el){
+  try{
+    const root=el.shadowRoot;
+    if(root && !root.__agwLabelCss){
+      const st=document.createElement('style'); st.textContent=SEL_LABEL_CSS; root.appendChild(st); root.__agwLabelCss=st;
+    }
+    el.title=selLabelText(el);
+  }catch(_){}
+}
+function patchSelects(root=document){ try{ root.querySelectorAll?.('md-outlined-select').forEach(patchSelect); }catch(_){} }
+patchSelects();
+// selects are re-created by dialogs and re-filled by every render: patch them as they land (shadow-root
+// writes do not touch the document tree, so this observer cannot feed itself)
+let selPatchQueued=false;
+new MutationObserver(()=>{ if(selPatchQueued) return; selPatchQueued=true;
+  requestAnimationFrame(()=>{ selPatchQueued=false; patchSelects(); }); }).observe(document.body,{childList:true,subtree:true});
+document.body.addEventListener('change',e=>{ const s=e.target.closest?.('md-outlined-select'); if(s) s.title=selLabelText(s); });
 
 // ============ Data adapter layer (contract identical to the hand-written version) ============
 class BaseAdapter{
@@ -59,69 +91,6 @@ if(res.status===401) openKeyDialog(); // missing/wrong password: open the input 
     const ct = res.headers.get('content-type')||'';
     return ct.includes('json') ? res.json() : res.text();
   }
-}
-class MockAdapter extends BaseAdapter{
-  constructor(){ super();
-    this._insts=[
-      {name:'default',port:16384,running:true,tlsOn:false,chCount:3},
-      {name:'free-deepseek',port:16388,running:true,tlsOn:true,chCount:5},
-      {name:'nvidia',port:16386,running:false,tlsOn:false,chCount:1},
-    ];
-    this._chs={ default:[
-        {name:'deepseek-official',type:'openai',baseUrl:'https://api.deepseek.com/v1',proxy:'-',models:['deepseek-chat','deepseek-reasoner'],default:true,apiKey:'sk-mock-xxxx',hasKey:true},
-        {name:'local-minicpm',type:'openai',baseUrl:'http://127.0.0.1:8080/v1',proxy:'-',models:['minicpm5-1b'],apiKey:'',hasKey:false},
-      ], 'free-deepseek':[
-        {name:'pool-a',type:'openai',baseUrl:'https://api.example-provider-a.com/v1',proxy:'clash',models:['deepseek-chat'],default:true,delayMs:800,hasKey:true},
-        {name:'pool-b',type:'claude',baseUrl:'https://api.anthropic.com/v1',proxy:'clash',models:['claude-sonnet-4-5'],hasKey:true},
-        {name:'pool-c',type:'gemini',baseUrl:'https://generativelanguage.googleapis.com/v1beta',proxy:'-',models:['gemini-2.5-pro'],hasKey:true},
-      ], nvidia:[
-        {name:'nvidia-k3-a',type:'openai',baseUrl:'https://integrate.api.nvidia.com',proxy:'-',models:['kimi-k3'],hasKey:true},
-      ]};
-    this._stats={ default:{requests:1287,errors:14,uptime:3600*5.2,byChannel:{'deepseek-official':{requests:1102,inputTokens:845210,outputTokens:233100},'local-minicpm':{requests:185,inputTokens:42100,outputTokens:18900}}},
-      'free-deepseek':{requests:4412,errors:88,uptime:3600*11.4,byChannel:{'pool-a':{requests:2001,inputTokens:1234567,outputTokens:345678},'pool-b':{requests:1400,inputTokens:998877,outputTokens:221100},'pool-c':{requests:1011,inputTokens:554433,outputTokens:120011}}},
-      nvidia:{requests:0,errors:0,uptime:0,byChannel:{}} };
-    this._pxs={};
-  }
-  async getInstances(){ return {instances:this._insts.map(i=>({...i})), current:'default'}; }
-  async getConfig(name){ return {name, port:this._insts.find(i=>i.name===name)?.port||16384,
-    webToken:'(已设)', channels:(this._chs[name]||[]).map(c=>({...c})),
-    proxies:this._pxs[name]||{},
-    record:(this._rec&&this._rec[name])||{enable:false,server:''},
-    routing:{maxRetry:3,timeoutSec:60,cooldownSec:30}}; }
-  async saveConfig(name,patch){ if(patch&&patch.proxies) this._pxs[name]=patch.proxies; if(patch&&patch.record){ this._rec=this._rec||{}; this._rec[name]=patch.record; } return {ok:true,patch}; }
-  async getRecordBody(name,id){ return {ok:true,record:{id,time:'2026-08-29 09:41:22',model:'deepseek-chat',channel:'pool-a',status:200,duration:1840,inputTokens:128,outputTokens:64,request:{model:'deepseek-chat',messages:[{role:'user',content:'你好'}]},response:'data: {"choices":[{"delta":{"content":"你好!"}}]}\n\ndata: [DONE]\n'}}; }
-  async createInstance(name,body){ this._insts.push({name,port:body.port,running:false,chCount:0,tlsOn:!!(body.tls&&body.tls.enable)}); return {ok:true}; }
-  async saveChannel(inst,ch){ const a=this._chs[inst]||(this._chs[inst]=[]);
-    const i=a.findIndex(c=>c.name===ch.name); if(i>=0)a[i]=ch; else a.push(ch); return {ok:true}; }
-  async deleteChannel(inst,chName){ this._chs[inst]=(this._chs[inst]||[]).filter(c=>c.name!==chName); return {ok:true}; }
-  async deleteInstance(name){ this._insts=this._insts.filter(x=>x.name!==name); return {ok:true}; }
-  async renameInstance(name,newName){ const i=this._insts.find(x=>x.name===name); if(i)i.name=newName; return {ok:true,hotReload:true,name:newName}; }
-  async fetchModels(inst,body){ return {models:['mock-model-alpha','mock-model-beta','mock-model-gamma']}; }
-  async syncModels(inst){ return {ok:true,instance:inst,channels:0,added:0,fails:0}; }
-  async getStats(name){ return this._stats[name]||{requests:0,errors:0,uptime:0,byChannel:{}}; }
-  async getLogs(name,lines){ return Array.from({length:Math.min(lines||50,50)},(_,i)=>
-    `[0${i%9}:${10+i}:22] OpenAGW v1.0.0 就绪 (配置: .../config.${name}.json)`).join('\n'); }
-  async getRequests(name){ return [
-    {id:'req_mock01',time:'09:41:22',model:'deepseek-chat',channel:'pool-a',status:200,duration:1840},
-    {id:'req_mock02',time:'09:41:19',model:'kimi-k3',channel:'nvidia-k3-a',status:429,duration:310},
-    {id:'req_mock03',time:'09:40:58',model:'claude-sonnet-4-5',channel:'pool-b',status:200,duration:7190}]; }
-  async action(name,a){ const i=this._insts.find(x=>x.name===name); if(i&&a==='start')i.running=true; if(i&&a==='stop')i.running=false; return {ok:true}; }
-  async getKeys(inst){ return {keys:this._keys||(this._keys=[{key:'sk-mock1234567890abcdef',name:'演示卡',enable:true,quotaTokens:100000,usedTokens:35210,models:[],channels:[],expiresAt:'',note:'',createdAt:'2026-09-01T00:00:00Z'}])}; }
-  async createKey(inst,body){ const k={key:'sk-mock'+Math.random().toString(36).slice(2,20),name:body.name||'',role:body.role||'user',enable:true,quotaTokens:body.quotaTokens||0,usedTokens:0,models:body.models||[],channels:[],expiresAt:body.expiresAt||'',note:body.note||'',createdAt:new Date().toISOString()}; (this._keys=this._keys||[]).push(k); return {ok:true,key:k}; }
-  async updateKey(inst,body){ const k=(this._keys||[]).find(x=>x.key===body.key); if(k){ if(body.enable!==undefined)k.enable=body.enable; if(body.role)k.role=body.role; if(body.resetUsage)k.usedTokens=0; if(body.addQuota)k.quotaTokens+=body.addQuota; } return {ok:true}; }
-  async deleteKey(inst,key){ this._keys=(this._keys||[]).filter(x=>x.key!==key); return {ok:true}; }
-  async getAdminAuth(inst){ return {hasAdminKey:true,secondKeySet:false,totpEnabled:false}; }
-  async setAdminAuth(inst,body){ return {ok:true,secondKeySet:!!body.secondKey,totpEnabled:body.totpAction==='enable',totpSecret:body.totpAction==='enable'?'JBSWY3DPEHPK3PXP':null,otpauthUrl:'otpauth://totp/OpenAGW-demo?secret=JBSWY3DPEHPK3PXP&issuer=OpenAGW'}; }
-  async getTunnel(){ return this._tunnel||{running:false,url:'',log:[]}; }
-  async tunnelAction(action){ this._tunnel = action==='start' ? {running:true,url:'https://demo-abc-xyz.trycloudflare.com',log:[]} : {running:false,url:'',log:[]}; return {ok:true,...this._tunnel}; }
-  async getBalance(inst,ch){ return {ok:true,channel:ch,balance:'42.00',unit:'CNY'}; }
-  async probeNow(inst){ return {ok:true,probe:{}}; }
-  async shutdownAll(){ return {ok:true}; }
-  async getWebSessions(){ const now=Date.now(); return {ok:true, now, sessions:[{sid:'demoSIDaaaaaaaaaaaaaaaa1',exp:now+6*864e5},{sid:'demoSIDbbbbbbbbbbbbbbbb2',exp:now+2*864e5}], pending:[{sid:'pendSIDcccccccccccccccc3',exp:now+9e5}], adminExpireAt:0}; }
-  async revokeWebSession(sid){ return {ok:true, sid:sid||null}; }
-  async setAdminExpire(at){ return {ok:true, at:Number(at)||0}; }
-  async getMdu(){ return {ok:true, tokens:{primary:'#4C6B3C'}, source:'mock'}; }
-  async chat(body){ return { json:()=>Promise.resolve({choices:[{message:{content:'(Mock 回复) 收到: '+body.messages.at(-1).content}}]}) }; }
 }
 class HttpAdapter extends BaseAdapter{
   constructor(base){
@@ -177,34 +146,29 @@ await new Promise(r=>setTimeout(r,3500)); // let the old process exit and the ne
   async getBalance(inst,ch,signal){ return this._fetch(`${this.base}/admin/api/balance/${encodeURIComponent(inst)}/${encodeURIComponent(ch)}`,{headers:this._hdr()},signal); }
   async probeNow(inst,signal){ return this._fetch(`${this.base}/admin/api/probe/${encodeURIComponent(inst)}`,{method:'POST',headers:this._hdr()},signal); }
   async shutdownAll(signal){ return this._fetch(`${this.base}/admin/api/shutdown-all`,{method:'POST',headers:this._hdr()},signal); }
-  async chat(body,signal){ const r=await fetch(`${this.base}/admin/api/chat`,{method:'POST',headers:{...this._hdr(),'Content-Type':'application/json'},body:JSON.stringify(body),signal});
-    if(!r.ok) throw new Error(await r.text().catch(()=>'聊天请求失败')); return r; }
 }
 
 // ============ State ============
 const VIEWS = [
 // icons use Material Symbols word forms (local font ligatures; see @font-face)
-  {id:'overview', label:'总览',   icon:'home'},
+  {id:'overview', label:'首页',   icon:'home'},
   {id:'providers',label:'提供商', icon:'business'},
   {id:'routing',  label:'路由',   icon:'sync'},
+  {id:'stats',    label:'统计',   icon:'bar_chart'},
+  {id:'logs',     label:'日志',   icon:'description'},
   {id:'keys',     label:'密钥',   icon:'key'},
   {id:'cards',    label:'卡密',   icon:'confirmation_number'},
   {id:'ports',    label:'端口',   icon:'power'},
   {id:'session',  label:'会话',   icon:'devices'},
   {id:'replace',  label:'替换',   icon:'find_replace'},
-  {id:'stats',    label:'统计',   icon:'bar_chart'},
-  {id:'requests', label:'请求',   icon:'monitoring'},
-  {id:'logs',     label:'日志',   icon:'description'},
-  {id:'chat',     label:'聊天',   icon:'chat'},
 ];
-const TITLES = {overview:'总览',providers:'AI 提供商',routing:'路由与重试',keys:'API 密钥',cards:'卡密管理',ports:'服务端口',session:'面板会话',replace:'文本替换',stats:'统计信息',requests:'请求记录',logs:'日志',chat:'聊天测试'};
-
+const TITLES = {overview:'首页',providers:'提供商',routing:'路由策略',keys:'API 密钥',cards:'卡密管理',ports:'服务端口',session:'面板会话',replace:'文本替换',stats:'统计',logs:'日志'};
 const Store = {
   page:'overview', instances:[], configs:new Map(), aborts:new Map(), timer:null,
-  online:navigator.onLine, currentName:'', adapter:'http',
+  online:navigator.onLine, currentName:'',
   inst:'default',
-  chat:{ messages:[], inst:'', streaming:false },
   charts:null,
+  chartMode:{daily:'bar',model:'bar',dist:'hbar'},
   abort(key){ const c=this.aborts.get(key); if(c){ try{c.abort();}catch(e){} }
     const n=new AbortController(); this.aborts.set(key,n); return n.signal; },
   armTimeout(key,ms,onFire){ const c=this.aborts.get(key); if(!c) return ()=>{};
@@ -217,58 +181,71 @@ let adapter = new HttpAdapter();
 
 // ============ Navigation ============
 function buildNav(){
-// Sidebar items use custom buttons: MW md-list-item line-height/spacing misbehaves on some screens (rows too tall, active pill too big)
+// Sidebar items are custom buttons: md-list-item's line-height/spacing misbehaves on some screens
   $('#railList').innerHTML = VIEWS.map(v=>
-    `<button type="button" class="rail-item" data-page="${v.id}" ${v.id===Store.page?'active':''}>
-       <span class="msym" aria-hidden="true">${v.icon}</span><span>${v.label}</span>
+    `<button type="button" class="rail-item" data-page="${v.id}" title="${escAttr(v.label)}" ${v.id===Store.page?'active':''}>
+       <span class="msym" aria-hidden="true">${v.icon}</span><span class="lbl">${v.label}</span>
      </button>`).join('');
-// md-navigation-tab's slots are inactive-icon / active-icon (there is no icon slot),
-// Writing slot="icon" is dropped outright -> bottom-bar icons disappear. Both slots must be provided.
-  $('#navbar').innerHTML = NAV_TABS.map(v=>
-    `<md-navigation-tab data-page="${v.id}" label="${v.label}" ${navActive(v.id)?'active':''}>
-       <md-icon slot="inactive-icon" aria-hidden="true">${v.icon}</md-icon>
-       <md-icon slot="active-icon" aria-hidden="true">${v.icon}</md-icon>
-     </md-navigation-tab>`).join('');
 }
 function syncNav(){
   $$('#railList .rail-item').forEach(el=>el.toggleAttribute('active', el.dataset.page===Store.page));
-  const tabs=$$('#navbar md-navigation-tab');
-  const activePage=NAV_ACTIVE_PAGE();
-  const idx=tabs.findIndex(t=>t.dataset.page===activePage);
-  const bar=$('#navbar');
-  if(idx>=0 && bar.activeIndex!==idx) bar.activeIndex=idx;
-  tabs.forEach(t=>t.toggleAttribute('active', t.dataset.page===activePage));
 }
-//// The bottom bar holds 5 common pages; the rest fold into "More": all 12 pages remain reachable on phones
-const NAV_TABS = ['overview','providers','routing','keys','stats']
-  .map(id=>VIEWS.find(v=>v.id===id)).filter(Boolean)
-  .concat([{id:'__more', label:'更多', icon:'more_horiz'}]);
-const NAV_ACTIVE_PAGE = () => NAV_TABS.some(t=>t.id===Store.page) ? Store.page : '__more';
-function navActive(id){ return id===NAV_ACTIVE_PAGE(); }
-function openViewSheet(){
-  const cur=Store.page;
-  openDialog('全部页面', '<div class="vs-grid">'+VIEWS.map(v=>
-    `<button type="button" class="ov-nav-btn" data-page="${v.id}" ${v.id===cur?'style="border-color:var(--md-sys-color-primary)"':''}>
-       <span class="msym" aria-hidden="true">${v.icon}</span><span>${v.label}</span></button>`).join('')+'</div>',
-    {okText:'关闭', cancel:false});
+// ============ Sidebar open / close ============
+// Collapsed = 56px icon rail: every item ends up 44x44, the label is clipped away and only the icon shows.
+// Expanded = 236px drawer: the shell is pushed right and everything outside the rail is dimmed by the scrim.
+function railOpen(){ return $('#rail')?.dataset.open==='true'; }
+function setRail(open, save=true){
+  const rail=$('#rail'); if(!rail) return;
+  rail.dataset.open=open?'true':'false';
+  const btn=$('#railToggle');
+  if(btn){ btn.setAttribute('aria-expanded',open?'true':'false'); btn.setAttribute('aria-label',open?'收起侧边栏':'展开侧边栏'); }
+  const ic=$('#railToggleIc'); if(ic) ic.textContent=open?'menu_open':'menu';
+  const sc=$('#railScrim'); if(sc) sc.classList.toggle('show', !!open);
+  if(save){ try{ localStorage.setItem('agw-rail', open?'open':'closed'); }catch(_){} }
+}
+function toggleRail(){ setRail(!railOpen()); }
+// Page switch: the leaving page slides up out of the main area, then the next page rises from below.
+// PAGE_OUT_MS mirrors the .page.is-out animation in app.css — keep the two in sync.
+const PAGE_OUT_MS = 190;
+let navSeq = 0;
+const waitMs = ms => new Promise(r=>setTimeout(r,ms));
+function reducedMotion(){ try{ return matchMedia('(prefers-reduced-motion: reduce)').matches; }catch(_){ return false; } }
+function hidePageEl(el){ if(!el) return; el.classList.remove('is-out','is-in'); el.hidden=true; el.classList.add('hidden'); }
+function showPageEl(el, animate){
+  if(!el) return;
+  el.hidden=false; el.classList.remove('hidden','is-out');
+  if(!animate){ el.classList.remove('is-in'); return; }
+  el.classList.remove('is-in'); void el.offsetWidth; el.classList.add('is-in');
 }
 async function go(page){
   if(!VIEWS.some(v=>v.id===page)) return;
-  // slide direction from nav order: target after current = enters from the right, before = from the left
-// Same page (go triggered twice, e.g. bottom-bar click + nav event) skips animation so the second go does not override the slide with a fade
-  const oldIdx=VIEWS.findIndex(v=>v.id===Store.page), newIdx=VIEWS.findIndex(v=>v.id===page);
-  const anim=newIdx>oldIdx?'anim-slide-r':newIdx<oldIdx?'anim-slide-l':'';
+  const seq=++navSeq;
+  const prev=Store.page, prevEl=$(`#page-${prev}`), nextEl=$(`#page-${page}`);
+  const same=prev===page, main=$('#main');
   Store.page=page;
-  $$('.page').forEach(p=>{ const on=p.id===`page-${page}`; p.classList.toggle('hidden',!on); p.hidden=!on;
-    if(on && anim){ p.classList.remove('anim-in','anim-slide-r','anim-slide-l'); void p.offsetWidth; p.classList.add(anim); } });
-  $('#pageTitle').textContent = TITLES[page]||page;
   syncNav();
   Store.clearRefresh();
+  // The leaving page keeps its place in the flow while it rises, so the main area does not collapse mid-transition.
+  if(!same && prevEl && nextEl && !prevEl.hidden && !reducedMotion()){
+    prevEl.classList.remove('is-in');
+    prevEl.classList.add('is-out');
+    await waitMs(PAGE_OUT_MS);
+    if(seq!==navSeq){ if(prevEl.classList.contains('is-out')) hidePageEl(prevEl); return; }  // a later switch took over
+    hidePageEl(prevEl);
+    $('#pageTitle').textContent = TITLES[page]||page;
+    if(main) main.scrollTop=0;
+    showPageEl(nextEl, true);
+  }else{
+    $$('.page').forEach(p=>{ if(p!==nextEl) hidePageEl(p); });
+    $('#pageTitle').textContent = TITLES[page]||page;
+    if(!same && main) main.scrollTop=0;
+    showPageEl(nextEl, false);
+  }
   if(page==='overview') Store.startRefresh(()=>{ if(Store.page==='overview' && !Store._ovBusy) renderOverview(); },5000);
   else if(page==='stats') Store.startRefresh(()=>{ if(Store.page==='stats' && !Store._stBusy) renderStats(); },5000);
   const R={overview:renderOverview,providers:renderProviders,routing:renderRouting,
     keys:renderKeys,cards:renderCards,ports:renderPorts,session:renderSession,replace:renderReplace,
-    stats:renderStats,requests:renderRequests,logs:renderLogs,chat:renderChat};
+    stats:renderStats,logs:renderLogs};
   await R[page]?.();
 }
 
@@ -287,7 +264,7 @@ function rpRenderChips(dir){
     '<span class="mm-chip" data-i="'+i+'"><span class="nm">'+esc(r.re)+'</span><span class="arrow">→</span><span class="nm">'+esc(r.to||'(删除匹配)')+'</span>'
     +(r.ci?'<span class="tag default" style="margin-left:2px">Aa</span>':'')
     +'<button class="mm-x" data-i="'+i+'" aria-label="删除">✕</button></span>').join('')
-    :'<span style="font-size:12px;color:var(--md-sys-color-on-surface-variant)">暂无规则 — 填上方两框后点 + 添加 (点 ✕ 删除)</span>';
+    :'<span style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">暂无规则 — 填上方两框后点 + 添加 (点 ✕ 删除)</span>';
 }
 async function rpSave(){
   try{
@@ -345,42 +322,38 @@ async function fillInstSelect(sel, current, signal){
     const {instances}=await adapter.getInstances(signal);
     Store.instances=instances;
     if(!current || !instances.some(i=>i.name===current)) current = instances[0]?.name || '';
-    sel.innerHTML = instances.map(i=>`<md-select-option value="${escAttr(i.name)}" ${i.name===current?'selected':''}>${esc(i.name)}</md-select-option>`).join('');
-    await sel.updateComplete;
-    await Promise.all([...sel.querySelectorAll('md-select-option')].map(o=>o.updateComplete||Promise.resolve()));
+    // Rebuilding identical options makes the select flash on every refresh; only touch the DOM when the set changes
+    const sig = instances.map(i=>i.name).join('\u0001');
+    if(sel.dataset.instSig !== sig){
+      sel.dataset.instSig = sig;
+      sel.innerHTML = instances.map(i=>`<md-select-option value="${escAttr(i.name)}" title="${escAttr(i.name)}" ${i.name===current?'selected':''}>${esc(i.name)}</md-select-option>`).join('');
+      await sel.updateComplete;
+      await Promise.all([...sel.querySelectorAll('md-select-option')].map(o=>o.updateComplete||Promise.resolve()));
+    }
     sel.value = current;
     await sel.updateComplete;
+    patchSelect(sel);
     return current;
   }catch(e){ if(e.name!=='AbortError') console.error(e); }
   return current;
 }
-async function fillChatModels(sel, inst){
-  try{
-    const cfg=await adapter.getConfig(inst);
-    Store.configs.set(inst,cfg);
-    const models=new Set();
-    for(const ch of cfg.channels||[]){
-      (ch.models||[]).forEach(m=>models.add(m));
-      if(ch.modelMap) Object.keys(ch.modelMap).forEach(m=>models.add(m));
-    }
-    const arr=[...models];
-    sel.innerHTML = arr.length? arr.map((m,i)=>`<md-select-option value="${escAttr(m)}" ${i===0?'selected':''}>${esc(m)}</md-select-option>`).join('')
-                              : '<md-select-option value="">(无模型)</md-select-option>';
-    await sel.updateComplete;
-    await Promise.all([...sel.querySelectorAll('md-select-option')].map(o=>o.updateComplete||Promise.resolve()));
-    if(arr.length) sel.value=arr[0];
-  }catch(e){ sel.innerHTML='<md-select-option value="">(加载失败)</md-select-option>'; }
-}
-
-// ============ List item builders: md-list-item supports only slots (no headline attribute in v2.5) ============
-function listItem({icon='', headline='', sub='', over='', endHtml='', active=false, data=''}){
-  return `<md-list-item ${data} tabindex="0" role="button">
-    ${icon?`<span slot="start" aria-hidden="true">${icon}</span>`:''}
-    ${over?`<span slot="overline">${over}</span>`:''}
-    <span slot="headline" title="${escAttr(headline)}">${headline}</span>
-    ${sub?`<span slot="supporting-text" title="${escAttr(sub.replace(/<[^>]+>/g,''))}">${sub}</span>`:''}
-    ${endHtml?`<span slot="end">${endHtml}</span>`:''}
-  </md-list-item>`;
+// ============ Card item: head (name) / body (details) / foot (actions) ============
+// Three stacked rows instead of one squeezed line: name+tags+status on top, detail lines in the middle,
+// action buttons on their own row at the bottom. Every detail line is single-line with an ellipsis and
+// keeps the full text in title=, so a long path or note never reflows the card.
+function cardItem({dot='', name='', tags='', state='', stateCls='', tail='', lines=[], acts='', data=''}){
+  const body=(lines||[]).filter(Boolean);
+  return `<div class="card-item"${data?' '+data:''}>
+    <div class="card-item-head">
+      ${dot?`<span class="card-item-dot ${dot}" aria-hidden="true"></span>`:''}
+      <span class="card-item-name" title="${escAttr(name)}">${esc(name)}</span>
+      ${tags?`<span class="card-item-tags">${tags}</span>`:''}
+      ${state?`<span class="card-item-state ${stateCls}">${state}</span>`:''}
+      ${tail?`<span class="card-item-tail">${tail}</span>`:''}
+    </div>
+    ${body.length?`<div class="card-item-detail">${body.map(l=>`<div class="card-item-line" title="${escAttr(unesc(stripTags(l)))}">${l}</div>`).join('')}</div>`:''}
+    ${acts?`<div class="card-item-acts">${acts}</div>`:''}
+  </div>`;
 }
 
 // ============ Render: overview ============
@@ -397,70 +370,103 @@ async function renderOverview(){
     $('#ov-instances').textContent=instances.length;
     $('#ov-running').textContent=instances.filter(i=>i.running).length;
     $('#ov-channels').textContent=instances.reduce((a,i)=>a+(i.chCount||0),0);
-// Fetch per-instance stats/config in parallel: with dozens of instances the old sequential
-// loop took longer than the 5s refresh interval, so every tick aborted the previous render
-// and the overview stayed on "加载中…" forever.
+// Per-instance stats in parallel: the old sequential loop overran the 5s refresh and kept aborting itself
     const stats=await Promise.all(instances.map(i=>adapter.getStats(i.name,signal).catch(e=>{ if(e.name==='AbortError') ovTimedOut=true; return {}; })));
-    if(ovTimedOut){ $('#ov-inst-list').innerHTML='<div class="empty">实例数据读取超时，正在重试…</div>'; $('#ov-ch-list').innerHTML='<div class="empty">读取超时，正在重试…</div>'; return; }
-    let totalReq=0,maxUp=0;
-    for(const s of stats){ totalReq+=s.requests||0; if(s.uptime>maxUp)maxUp=s.uptime; }
-    $('#ov-requests').textContent=fmtNum(totalReq);
+    if(ovTimedOut){ $('#ov-inst-list').innerHTML='<div class="empty">实例数据读取超时，正在重试…</div>'; return; }
+    let req=0,err=0,inTok=0,outTok=0,cached=0,maxUp=0;
+    const models=new Set();
+    for(const st of stats){
+      req+=st.requests||0; err+=st.errors||0;
+      if((st.uptime||0)>maxUp) maxUp=st.uptime||0;
+      for(const v of Object.values(st.byChannel||{})){ inTok+=v.inputTokens||0; outTok+=v.outputTokens||0; }
+      for(const [m,v] of Object.entries(st.byModel||{})){
+        cached+=v.cached||0;
+        if(((v.inputTokens||0)+(v.outputTokens||0)+(v.requests||0))>0) models.add(m);
+      }
+    }
+    $('#ov-requests').textContent=fmtNum(req);
+    $('#ov-errors').textContent=fmtNum(err);
+    $('#ov-intok').textContent=fmtTok(inTok);
+    $('#ov-outtok').textContent=fmtTok(outTok);
+    $('#ov-cached').textContent=fmtTok(cached);
+    $('#ov-hitrate').textContent=inTok?((cached/inTok)*100).toFixed(1)+'%':'-';
+    $('#ov-models').textContent=models.size||'-';
     $('#ov-uptime').textContent=fmtDur(maxUp);
-    $('#ov-inst-list').innerHTML='<md-list>'+instances.map(i=>listItem({
-      icon:`<span class="msym ${i.running?'ok':'err'}">circle</span>`,
-      headline:esc(i.name)+(i.tlsOn?' <span class="tag default">TLS</span>':''),
-      sub:`端口 ${i.port} · ${i.chCount} 渠道 · ${i.running?'运行中':'已停止'}`,
-      endHtml:'<span class="muted">›</span>',
-      data:`data-goto="ports"`,
-    })).join('')+'</md-list>';
-    const cfgs=await Promise.all(instances.map(i=>adapter.getConfig(i.name,signal).catch(e=>{ if(e.name==='AbortError') ovTimedOut=true; return null; })));
-    if(ovTimedOut){ $('#ov-ch-list').innerHTML='<div class="empty">读取超时，正在重试…</div>'; return; }
-    const chRows=[];
-    instances.forEach((inst,idx)=>{
-      const cfg=cfgs[idx]; if(!cfg) return;
-      for(const ch of (cfg.channels||[]).slice(0,3))
-        chRows.push(`<tr><td class="mono truncate" title="${escAttr(ch.name)}">${esc(ch.name)}</td><td><span class="tag ${esc(ch.type)}">${esc(ch.type)}</span></td><td class="mono truncate" title="${escAttr(ch.baseUrl)}">${esc(fmtHost(ch.baseUrl))}</td><td class="truncate" title="${escAttr(inst.name)}">${esc(inst.name)}</td></tr>`);
-    });
-    $('#ov-ch-list').innerHTML = chRows.length
-      ? `<div class="tbl-wrap"><table class="tbl" id="ov-ch-table" aria-label="渠道概览"><thead><tr><th style="width:24%">名称</th><th style="width:14%">类型</th><th style="width:46%">地址</th><th style="width:16%">实例</th></tr></thead><tbody>${chRows.join('')}</tbody></table></div>`
-      : '<div class="empty">无渠道</div>';
+    $('#ov-inst-list').innerHTML=instances.map(i=>cardItem({
+      dot:i.running?'ok':'err',
+      name:i.name,
+      tags:i.tlsOn?'<span class="tag default">TLS</span>':'',
+      state:i.running?'运行中':'已停止',
+      stateCls:i.running?'ok':'err',
+      tail:'<span class="msym" style="font-size:11px">chevron_right</span>',
+      lines:[`端口 <b>${esc(i.port)}</b> · ${esc(i.chCount)} 渠道`],
+      data:'data-goto="ports"',
+    })).join('');
+// Recent log lines of the instance picked in the top bar (falls back to the panel host)
+    const logInst=(Store.inst && instances.some(i=>i.name===Store.inst)) ? Store.inst : (current || instances[0]?.name || '');
+    const lb=$('#ov-log');
+    if(logInst && lb){
+      $('#ov-log-inst').textContent=logInst;
+      try{
+        const txt=await adapter.getLogs(logInst,12,signal);
+        const tail=(lb.scrollHeight-lb.scrollTop-lb.clientHeight)<24;
+        lb.textContent=txt||'(空)';
+        if(tail) lb.scrollTop=lb.scrollHeight;
+      }catch(e){
+        if(e.name==='AbortError') throw e;
+        lb.textContent='读取失败: '+e.message;
+      }
+    }
   }catch(e){ if(e.name!=='AbortError'){ console.error(e); snack(e.message,true); } }
   finally{ ovDisarm(); Store._ovBusy=false; }
 }
 
 // ============ Render: providers ============
+// Channel entry: two-line card — name (+tags) on the top row, a summary block in the middle (every line
+// truncates with an ellipsis and keeps the full text in title=), action buttons on their own bottom row.
+function channelCard(ch){
+  const models=(ch.models||[]).filter(Boolean);
+  const mm=Object.entries(ch.modelMap||{}).filter(([k,v])=>v&&v!==k);
+  const tags=`<span class="tag ${esc(ch.type)}">${esc(ch.type)}</span>`
+    +(ch.default?'<span class="tag default">默认</span>':'')
+    +(ch.useResponses?'<span class="tag default" title="上游走 Responses API">⚡Responses</span>':'');
+  const extra=[];
+  if(ch.proxy && ch.proxy!=='-') extra.push('代理 '+esc(ch.proxy));
+  if(ch.delayMs) extra.push('延迟 '+esc(String(ch.delayMs))+'ms');
+  if(mm.length) extra.push('映射 '+mm.length+' 条');
+  if(ch.balanceUrl) extra.push('自定义余额');
+  if(ch.paramOverride) extra.push('参数覆写 '+esc(String(Object.keys(ch.paramOverride).length))+' 项');
+  const lines=[
+    `<span class="mono">${esc(ch.baseUrl||'-')}</span>`,
+    `模型 ${models.length} · ${models.length?esc(models.join('、')):'未配置'}`,
+  ];
+  if(extra.length) lines.push(extra.join(' · '));
+  return cardItem({
+    dot: ch.default?'ok':'',
+    name: ch.name,
+    tags,
+    lines,
+    acts:`<button type="button" class="icon-act ${ch.default?'on':''}" data-action="setDefaultProvider" data-name="${escAttr(ch.name)}" ${ch.default?'disabled':''} title="${ch.default?'当前默认渠道':'设为默认渠道'}"><span class="msym">${ch.default?'star':'star_outline'}</span></button>
+      <button type="button" class="icon-act" data-action="chBalance" data-name="${escAttr(ch.name)}" title="查余额"><span class="msym">account_balance_wallet</span></button>
+      <button type="button" class="icon-act" data-action="editProvider" data-name="${escAttr(ch.name)}" title="编辑"><span class="msym">edit</span></button>
+      <button type="button" class="icon-act err" data-action="deleteProvider" data-name="${escAttr(ch.name)}" title="删除"><span class="msym">delete</span></button>`,
+  });
+}
 async function renderProviders(){
   const signal=Store.abort('providers');
   const cur = await fillInstSelect($('#topInst'), Store.inst, signal); Store.inst=cur;
   try{
     const cfg=await adapter.getConfig(cur,signal); Store.configs.set(cur,cfg);
-    const tb=$('#pv-table tbody');
-    tb.innerHTML=(cfg.channels||[]).map(ch=>{
-      const mm=(ch.modelMap?Object.entries(ch.modelMap).filter(([k,v])=>k!==v):[]);
-      const cell=[(ch.models||[]).join(', ')].concat(mm.length?['改名: '+mm.map(([k,v])=>k+'→'+v).join(', ')]:[]).filter(Boolean).join(' ｜ ');
-      return `<tr>
-      <td class="mono truncate pv-setdef" data-action="setDefaultProvider" data-name="${escAttr(ch.name)}" title="点击设为默认渠道">${esc(ch.name)}${ch.default?' <span class="tag default">default</span>':''}${ch.useResponses?' <span class="tag default" title="上游走 Responses API">⚡Responses</span>':''}${ch.delayMs?` <span class="tag default" title="请求延迟">⏱${esc(String(ch.delayMs))}ms</span>`:''}${ch.balanceUrl?` <span class="tag default" title="自定义余额接口: ${escAttr(ch.balanceUrl)}">💰</span>`:''}</td>
-      <td><span class="tag ${esc(ch.type)}">${esc(ch.type)}</span></td>
-      <td class="mono truncate" title="${escAttr(ch.baseUrl)}">${esc(fmtHost(ch.baseUrl))}</td>
-      <td class="mono truncate" title="${escAttr(ch.proxy||'-')}">${esc(ch.proxy||'-')}</td>
-      <td class="mono truncate" title="${escAttr(cell)}">${esc(cell)}</td>
-      <td><div class="row-acts">
-        <button type="button" class="icon-act ${ch.default?'on':''}" data-action="setDefaultProvider" data-name="${escAttr(ch.name)}" ${ch.default?'disabled':''} title="${ch.default?'当前默认渠道':'设为默认渠道'}"><span class="msym">${ch.default?'star':'star_outline'}</span></button>
-        <button type="button" class="icon-act" data-action="chBalance" data-name="${escAttr(ch.name)}" title="查余额"><span class="msym">account_balance_wallet</span></button>
-        <button type="button" class="icon-act" data-action="editProvider" data-name="${escAttr(ch.name)}" title="编辑"><span class="msym">edit</span></button>
-        <button type="button" class="icon-act err" data-action="deleteProvider" data-name="${escAttr(ch.name)}" title="删除"><span class="msym">delete</span></button>
-      </div></td></tr>`;}).join('')
-      || '<tr><td colspan="6" class="empty">该实例暂无渠道，点右上「添加渠道」</td></tr>';
+    const chs=cfg.channels||[];
+    $('#pv-list').innerHTML=chs.length?chs.map(channelCard).join(''):'<div class="empty">该实例暂无渠道，点右上「添加渠道」</div>';
     const px=Object.entries(cfg.proxies||{});
-    $('#px-table tbody').innerHTML=px.map(([n,p])=>`<tr>
-      <td class="mono truncate" title="${escAttr(n)}">${esc(n)}</td>
-      <td><span class="tag">${esc(p.type||'socks5')}</span></td>
-      <td class="mono truncate" title="${escAttr(p.host+':'+p.port)}">${esc(p.host+':'+p.port)}${p.username?' <span class="msym" style="font-size:12px;vertical-align:-2px;color:var(--md-sys-color-primary)">key</span>':''}</td>
-      <td><div class="row-acts">
-        <button type="button" class="icon-act" data-action="editProxy" data-name="${escAttr(n)}" title="编辑"><span class="msym">edit</span></button>
-        <button type="button" class="icon-act err" data-action="delProxy" data-name="${escAttr(n)}" title="删除"><span class="msym">delete</span></button>
-      </div></td></tr>`).join('')
-      || '<tr><td colspan="4" class="empty">暂无代理，渠道可留空直连</td></tr>';
+    $('#px-list').innerHTML=px.length?px.map(([n,p])=>cardItem({
+      name:n,
+      tags:`<span class="tag">${esc(p.type||'socks5')}</span>`,
+      lines:[`<span class="mono">${esc(p.host+':'+p.port)}</span>${p.username?' · 用户名认证':''}`],
+      acts:`<button type="button" class="icon-act" data-action="editProxy" data-name="${escAttr(n)}" title="编辑"><span class="msym">edit</span></button>
+        <button type="button" class="icon-act err" data-action="delProxy" data-name="${escAttr(n)}" title="删除"><span class="msym">delete</span></button>`,
+    })).join(''):'<div class="empty">暂无代理，渠道可留空直连</div>';
   }catch(e){ if(e.name!=='AbortError') snack(e.message,true); }
 }
 
@@ -477,6 +483,22 @@ async function setDefaultChannel(n){
 }
 
 // ============ Render: routing ============
+let rtExtra=[];   // custom privacy-filter regexes; written on 保存设置, never on keystroke
+function rtRenderChips(){
+  const box=$('#rt-extra-chips'); if(!box) return;
+  box.innerHTML=rtExtra.length?rtExtra.map((r,i)=>
+    `<span class="mm-chip" data-i="${i}"><span class="nm mono" title="${escAttr(r)}">${esc(r)}</span><button class="mm-x" data-i="${i}" aria-label="删除">✕</button></span>`).join('')
+    :'<span class="muted small">暂无自定义规则 — 填上方正则后点 + 添加</span>';
+}
+function rtAddChip(){
+  const f=$('#rt-extra-find'); if(!f) return;
+  const re=String(f.value||'').trim();
+  if(!re){ snack('先填一条正则',true); return; }
+  try{ new RegExp(re); }catch(e){ snack('正则无效: '+e.message,true); return; }
+  if(rtExtra.includes(re)){ snack('规则已存在',true); return; }
+  if(rtExtra.length>=50){ snack('最多 50 条规则',true); return; }
+  rtExtra.push(re); f.value=''; rtRenderChips();
+}
 async function renderRouting(){
   const signal=Store.abort('routing');
   const cur = await fillInstSelect($('#topInst'), Store.inst, signal); Store.inst=cur;
@@ -486,15 +508,39 @@ async function renderRouting(){
     $('#rt-maxRetry').value=String(r.maxRetry??3); $('#rt-timeout').value=String(r.timeoutSec??60); $('#rt-cooldown').value=String(r.cooldownSec??30);
     $('#rt-redact').selected=!((cfg.redact||{}).enable===false);
     $('#rt-redactRes').selected=!!((cfg.redact||{}).response);
-    $('#rt-redactExtra').value=((cfg.redact||{}).extra||[]).join('\n');
+    rtExtra=((cfg.redact||{}).extra||[]).map(x=>String(x)).filter(Boolean); rtRenderChips();
     $('#rt-modelSync').selected=!((cfg.modelSync||{}).enable===false);
     $('#rt-syncInterval').value=String((cfg.modelSync||{}).intervalHours??24);
-    $('#rt-channels').innerHTML='<md-list>'+(cfg.channels||[]).map(ch=>listItem({
-      icon:`<span class="msym">${ch.type==='openai'?'bolt':'diamond'}</span>`,
-      headline:esc(ch.name)+(ch.default?' <span class="tag default">default</span>':'')+(ch.useResponses?' <span class="tag default" title="该 OpenAI 渠道上游走 Responses API">⚡Responses</span>':''),
-      sub:esc((ch.models||[]).join(', '))||'未配置模型',
-      endHtml:`<span class="muted small mono" title="${escAttr(ch.baseUrl)}">${esc(fmtHost(ch.baseUrl))}</span>`,
-    })).join('')+'</md-list>' || '<div class="empty">无渠道</div>';
+    $('#rt-paramOverride').value=cfg.paramOverride?JSON.stringify(cfg.paramOverride,null,2):'';
+    const chs=cfg.channels||[];
+    // Table instead of a stack of list items: every cell truncates with an ellipsis and keeps the full value
+    // in title=, so a channel with 20 models no longer makes one row five lines tall.
+    $('#rt-channels').innerHTML = chs.length ? `<div class="tbl-wrap"><table class="tbl" id="rt-ch-table" aria-label="渠道与映射">
+      <thead><tr><th style="width:34%">名称</th><th style="width:24%">渠道</th><th style="width:9%">类型</th><th style="width:21%">映射</th><th style="width:12%">地址</th></tr></thead>
+      <tbody>${chs.map(ch=>{
+        const tags=(ch.default?' <span class="tag default">default</span>':'')+(ch.useResponses?' <span class="tag default" title="该 OpenAI 渠道上游走 Responses API">⚡Responses</span>':'');
+        const ms=[]; for(const m of (ch.models||[])) if(!ms.includes(m)) ms.push(m);
+        for(const k of Object.keys(ch.modelMap||{})) if(!ms.includes(k)) ms.push(k);
+        if(!ms.length) return `<tr>
+          <td class="truncate"><span class="muted">未配置模型</span></td>
+          <td class="mono truncate" title="${escAttr(ch.name)}">${esc(ch.name)}${tags}</td>
+          <td title="${escAttr(ch.type)}"><span class="tag ${esc(ch.type)}">${esc(ch.type)}</span></td>
+          <td class="truncate"><span class="muted">-</span></td>
+          <td class="mono truncate" title="${escAttr(ch.baseUrl)}">${esc(fmtHost(ch.baseUrl))}</td>
+        </tr>`;
+        return ms.map(m=>{
+          const mv=(ch.modelMap||{})[m], mapped=mv!==undefined&&mv!==m&&mv!=='';
+          const orig=mapped?mv:m; // 名称列取原始(上游真实)名; 无映射时请求名原样发上游, 原名即模型名
+          const mapTxt=mapped?m+' → '+mv:'';
+          return `<tr>
+          <td class="mono truncate" title="${escAttr(orig)}">${esc(orig)}</td>
+          <td class="mono truncate" title="${escAttr(ch.name)}">${esc(ch.name)}${tags}</td>
+          <td title="${escAttr(ch.type)}"><span class="tag ${esc(ch.type)}">${esc(ch.type)}</span></td>
+          <td class="mono truncate"${mapped?` title="${escAttr(mapTxt)}"`:''}>${mapped?esc(mapTxt):'<span class="muted">-</span>'}</td>
+          <td class="mono truncate" title="${escAttr(ch.baseUrl)}">${esc(fmtHost(ch.baseUrl))}</td>
+        </tr>`;
+        }).join('');
+      }).join('')}</tbody></table></div>` : '<div class="empty">无渠道</div>';
   }catch(e){ if(e.name!=='AbortError') snack(e.message,true); }
 }
 
@@ -550,20 +596,27 @@ async function renderPorts(){
     const data=await adapter.getInstances(signal);
     const instances=data.instances; if(data.current) Store.currentName=data.current;
     Store.multi=!!data.multi; Store.mainPort=data.mainPort||0;
-    $('#pt-list').innerHTML='<md-list>'+instances.map(i=>{
+    $('#pt-list').innerHTML=instances.map(i=>{
       const isSelf=i.name===Store.currentName;
-      let acts;
-      if(!i.running) acts=`<md-filled-button data-cmd="start" data-name="${escAttr(i.name)}">启动</md-filled-button>`;
-      else if(Store.multi&&i.name==='default') acts=`<md-text-button disabled title="单进程模式: default 承载主端口, 不能停止">停止 <span class="msym">lock</span></md-text-button>`;
-      else acts=`<md-text-button data-cmd="stop" data-name="${escAttr(i.name)}" style="color:var(--md-sys-color-error)">停止</md-text-button>`;
+      let power;
+      if(!i.running) power=`<md-filled-button data-cmd="start" data-name="${escAttr(i.name)}">启动</md-filled-button>`;
+      else if(Store.multi&&i.name==='default') power=`<md-text-button disabled title="单进程模式: default 承载主端口, 不能停止">停止 <span class="msym">lock</span></md-text-button>`;
+      else power=`<md-text-button data-cmd="stop" data-name="${escAttr(i.name)}" style="color:var(--md-sys-color-error)">停止</md-text-button>`;
       const prefix=Store.multi?(i.name==='default'?'无前缀':('/'+i.name)):null;
-      return listItem({
-        icon:`<span class="msym ${i.running?'ok':'err'}">circle</span>`,
-        headline:esc(i.name)+(isSelf?' <span class="tag default"><span class="msym">home</span>面板</span>':'')+(i.tlsOn?' <span class="tag default">TLS</span>':''),
-        sub:`端口 ${i.port} · ${i.chCount} 渠道 · ${i.running?'运行中':'已停止'}${prefix?(' · 主端口路径 '+prefix+'/v1'):''}`,
-        endHtml:`<div class="row-acts"><md-outlined-button data-action="openPortDialog" data-name="${escAttr(i.name)}">编辑</md-outlined-button><md-text-button data-cmd="restart" data-name="${escAttr(i.name)}" title="热重载配置">重载</md-text-button>${acts}</div>`,
+      const tags=(isSelf?'<span class="tag default"><span class="msym">home</span>面板</span>':'')+(i.tlsOn?'<span class="tag default">TLS</span>':'');
+      return cardItem({
+        dot:i.running?'ok':'err',
+        name:i.name,
+        tags,
+        state:i.running?'运行中':'已停止',
+        stateCls:i.running?'ok':'err',
+        lines:[
+          `端口 <b>${esc(i.port)}</b> · ${esc(i.chCount)} 渠道`,
+          prefix?`主端口路径 <span class="mono">${esc(prefix)}/v1</span>`:'',
+        ],
+        acts:`<md-outlined-button data-action="openPortDialog" data-name="${escAttr(i.name)}">编辑</md-outlined-button><md-text-button data-cmd="restart" data-name="${escAttr(i.name)}" title="热重载配置">重载</md-text-button>${power}`,
       });
-    }).join('')+'</md-list>';
+    }).join('');
   }catch(e){ if(e.name!=='AbortError') snack(e.message,true); }
   loadTunnel();
 }
@@ -593,40 +646,44 @@ function renderTunnel(d){
 }
 
 // ============ Render: key card management ============
-function fmtTok(n){ n=Number(n)||0; if(n>=1e8)return (n/1e8).toFixed(2)+'亿'; if(n>=1e4)return (n/1e4).toFixed(1)+'万'; return String(n); }
+function fmtTok(n){ return shortNum(n); }
 async function renderCards(){
   const signal=Store.abort('cards');
   try{
     const data=await adapter.getKeys(Store.inst,signal);
     const keys=data.keys||[];
-    if(!keys.length){ $('#cd-list').innerHTML='<div class="empty" style="padding:32px;text-align:center;color:var(--md-sys-color-on-surface-variant)">暂无卡密 · 点右上角「发卡」给朋友发一个</div>'; return; }
-    $('#cd-list').innerHTML='<md-list>'+keys.map(k=>{
+    if(!keys.length){ $('#cd-list').innerHTML='<div class="empty" style="padding:24px;text-align:center;color:var(--md-sys-color-on-surface-variant)">暂无卡密 · 点右上角「发卡」给朋友发一个</div>'; return; }
+    $('#cd-list').innerHTML=keys.map(k=>{
       const quota=k.quotaTokens||0, used=k.usedTokens||0;
       const pct=quota>0?Math.min(100,Math.round(used/quota*100)):0;
+      const ERROR_COLOR='var(--md-sys-color-error)';
       let state,stateColor;
-      if(!k.enable){ state='已禁用'; stateColor='var(--md-sys-color-error)'; }
-      else if(k.expiresAt && new Date(k.expiresAt).getTime()<Date.now()){ state='已过期'; stateColor='var(--md-sys-color-error)'; }
-      else if(quota>0&&used>=quota){ state='已用尽'; stateColor='var(--md-sys-color-error)'; }
+      if(!k.enable){ state='已禁用'; stateColor=ERROR_COLOR; }
+      else if(k.expiresAt && new Date(k.expiresAt).getTime()<Date.now()){ state='已过期'; stateColor=ERROR_COLOR; }
+      else if(quota>0&&used>=quota){ state='已用尽'; stateColor=ERROR_COLOR; }
       else { state='启用中'; stateColor='var(--md-sys-color-primary)'; }
       const limits=[k.models&&k.models.length?`限模型 ${k.models.join('/')}`:null, k.expiresAt?`${String(k.expiresAt).slice(0,10)}到期`:null].filter(Boolean).join(' · ');
-      return listItem({
-        icon:'<span class="msym">confirmation_number</span>',
-        headline:esc(k.name||"(无名卡)")+` <span class="tag" style="color:${k.role==="admin"?"var(--md-sys-color-tertiary)":stateColor}">${k.role==="admin"?"管理":state}</span>`,
-        sub:`${esc(k.key.slice(0,10))}… · 用量 ${fmtTok(used)}${quota>0?' / '+fmtTok(quota)+' ('+pct+'%)':'(不限额)'}${limits?' · '+esc(limits):''}${k.note?' · '+esc(k.note):''}`,
-        endHtml:`<div class="row-acts">
-          <button type="button" class="icon-act" data-action="copyKey" data-key="${escAttr(k.key)}" title="复制完整Key"><span class="msym">content_copy</span></button>
-          <button type="button" class="icon-act" data-action="toggleKey" data-key="${escAttr(k.key)}" data-on="${k.enable?1:0}" title="${k.enable?'禁用':'启用'}"><span class="msym">${k.enable?'pause_circle':'play_circle'}</span></button>
-          <button type="button" class="icon-act" data-action="rechargeKey" data-key="${escAttr(k.key)}" data-name="${escAttr(k.name||'')}" title="充值额度/重置用量"><span class="msym">add_card</span></button>
-          <button type="button" class="icon-act err" data-action="delKey" data-key="${escAttr(k.key)}" data-name="${escAttr(k.name||'')}" title="删除"><span class="msym">delete</span></button>
-        </div>`,
+      return cardItem({
+        dot:stateColor===ERROR_COLOR?'err':'ok',
+        name:k.name||'(无名卡)',
+        tags:`<span class="tag" style="color:${k.role==='admin'?'var(--md-sys-color-tertiary)':stateColor}">${k.role==='admin'?'管理':state}</span>`,
+        lines:[
+          `<span class="mono">${esc(k.key.slice(0,10))}…</span> · 用量 ${fmtTok(used)}${quota>0?' / '+fmtTok(quota)+' ('+pct+'%)':'(不限额)'}`,
+          limits?esc(limits):'',
+          k.note?('备注 '+esc(k.note)):'',
+        ],
+        acts:`<md-text-button data-action="copyKey" data-key="${escAttr(k.key)}">复制</md-text-button>
+          <md-text-button data-action="toggleKey" data-key="${escAttr(k.key)}" data-on="${k.enable?1:0}">${k.enable?'禁用':'启用'}</md-text-button>
+          <md-text-button data-action="rechargeKey" data-key="${escAttr(k.key)}" data-name="${escAttr(k.name||'')}">充值</md-text-button>
+          <md-text-button data-action="delKey" data-key="${escAttr(k.key)}" data-name="${escAttr(k.name||'')}" style="color:var(--md-sys-color-error)">删除</md-text-button>`,
       });
-    }).join('')+'</md-list>';
+    }).join('');
   }catch(e){ if(e.name!=='AbortError') snack(e.message,true); }
 }
 // ---- Key-issuing dialog ----
 async function openCardDialog(){
   openDialog('发新卡 (实例 '+Store.inst+')', `
-    <div style="display:flex;flex-direction:column;gap:14px;padding-top:8px">
+    <div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
       <md-outlined-text-field data-f="name" label="名称(给谁用的)" required></md-outlined-text-field>
       <md-outlined-text-field data-f="quotaWan" label="额度(万 tokens)" type="number" value="100" helper="0 或留空=不限量; 100 = 100万tokens"></md-outlined-text-field>
       <md-outlined-text-field data-f="models" label="限定模型(逗号分隔, 留空=全部可用)" helper="例如 deepseek-chat, gpt-4o-mini"></md-outlined-text-field>
@@ -642,10 +699,10 @@ async function openCardDialog(){
       try{
         const r=await adapter.createKey(Store.inst,body);
         const k=r.key||{};
-        openDialog('发卡成功', `<div style="display:flex;flex-direction:column;gap:12px;padding-top:8px">
-          <div style="font-size:13px;color:var(--md-sys-color-on-surface-variant)">完整 Key (配置里可查, 也可随时回来复制):</div>
-          <div class="mono" style="word-break:break-all;background:var(--md-sys-color-surface-container);padding:12px;border-radius:12px;user-select:all">${esc(k.key||'')}</div>
-          <div style="font-size:13px">客户端用法: base_url 填 <span class="mono">http://&lt;网关地址&gt;:${Store.mainPort||'主端口'}/${esc(Store.inst==='default'?'':Store.inst+'/')}v1</span>（末尾 /v1 可省略）, API Key 填上面的 Key</div>
+        openDialog('发卡成功', `<div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
+          <div style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">完整 Key (配置里可查, 也可随时回来复制):</div>
+          <div class="mono" style="word-break:break-all;background:var(--md-sys-color-surface-container);padding:8px;border-radius:10px;user-select:all">${esc(k.key||'')}</div>
+          <div style="font-size:10px">客户端用法: base_url 填 <span class="mono">http://&lt;网关地址&gt;:${Store.mainPort||'主端口'}/${esc(Store.inst==='default'?'':Store.inst+'/')}v1</span>（末尾 /v1 可省略）, API Key 填上面的 Key</div>
           <md-filled-button id="cd-copy-new">复制 Key</md-filled-button>
         </div>`, {hideCancel:true});
         setTimeout(()=>{ const b=$('#cd-copy-new'); if(b) b.onclick=()=>{ navigator.clipboard&&navigator.clipboard.writeText(k.key||''); snack('已复制'); }; },50);
@@ -665,9 +722,9 @@ async function cardAction(action,key,name,on){
     }
     if(action==='rechargeKey'){
       openDialog('充值/重置 「'+esc(name||'')+'」', `
-        <div style="display:flex;flex-direction:column;gap:14px;padding-top:8px">
+        <div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
           <md-outlined-text-field data-f="addWan" label="追加额度(万 tokens)" type="number" value="0" helper="在现有额度上追加; 0=不变"></md-outlined-text-field>
-          <label style="display:flex;align-items:center;gap:8px;font-size:14px"><md-checkbox data-f="reset"></md-checkbox>重置已用量为 0</label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px"><md-checkbox data-f="reset"></md-checkbox>重置已用量为 0</label>
         </div>`, {onOk:async ()=>{
           const v=dlgValue();
           const body={key};
@@ -687,13 +744,30 @@ async function chBalanceAction(chName){
   snack('查询 '+chName+' 余额…');
   try{
     const r=await adapter.getBalance(Store.inst,chName);
-    openDialog('渠道余额 · '+esc(chName), `<div style="padding:8px 0;text-align:center">
-      <div style="font-size:32px;font-weight:600;color:var(--md-sys-color-primary)">${esc(String(r.balance))} <span style="font-size:14px">${esc(r.unit||'')}</span></div>
-      <div class="muted small" style="margin-top:6px">${esc(r.url||'')}</div></div>`, {hideCancel:true});
+    openDialog('渠道余额 · '+esc(chName), `<div style="padding:4px 0;text-align:center">
+      <div style="font-size:26px;font-weight:600;color:var(--md-sys-color-primary)">${esc(String(r.balance))} <span style="font-size:11px">${esc(r.unit||'')}</span></div>
+      <div class="muted small" style="margin-top:4px">${esc(r.url||'')}</div></div>`, {hideCancel:true});
   }catch(e){ snack(e.message,true); }
 }
 
 // ============ Render: statistics ============
+const DIST_LABEL={system:'系统提示',history:'对话历史',tools:'工具定义',user:'用户输入',reasoning:'思考内容',text:'正文',tool:'ToolCall'};
+const DIST_KEYS=['system','history','tools','user','reasoning','text','tool'];
+function chartMode(kind){ return (Store.chartMode&&Store.chartMode[kind])||'bar'; }
+function syncChartTabs(){
+  $$('[data-chart]').forEach(b=>b.classList.toggle('on', b.dataset.mode===chartMode(b.dataset.chart)));
+}
+function setChartMode(kind,mode){
+  Store.chartMode=Object.assign({daily:'bar',model:'bar',dist:'hbar'},Store.chartMode,{[kind]:mode});
+  try{ localStorage.setItem('agw-chart',JSON.stringify(Store.chartMode)); }catch(_){}
+  syncChartTabs(); drawAllCharts();
+}
+function drawAllCharts(){
+  const c=Store.charts; if(!c) return;
+  drawDailyChart(c.daily||[], chartMode('daily'));
+  drawModelChart(c.models||[], chartMode('model'));
+  drawDistChart(c.dist||[], chartMode('dist'));
+}
 async function renderStats(){
   if(Store._stBusy) return;
   Store._stBusy=true;
@@ -704,174 +778,114 @@ async function renderStats(){
     stDisarm=Store.armTimeout('stats',20000,()=>{ stTimedOut=true; });
     const cur = await fillInstSelect($('#topInst'), Store.inst, signal); Store.inst=cur;
     const s=await adapter.getStats(cur,signal);
-    const chs=Object.entries(s.byChannel||{});
-    const sumIn=chs.reduce((t,[,d])=>t+(d.inputTokens||0),0);
-    const sumOut=chs.reduce((t,[,d])=>t+(d.outputTokens||0),0);
-    const models=Object.entries(s.byModel||{});
-    const sumCached=models.reduce((t,[,d])=>t+(d.cached||0),0);
+    const chs=Object.values(s.byChannel||{});
+    const sumIn=chs.reduce((t,d)=>t+(d.inputTokens||0),0);
+    const sumOut=chs.reduce((t,d)=>t+(d.outputTokens||0),0);
+    const bm=Object.entries(s.byModel||{});
+    const sumCached=bm.reduce((t,[,d])=>t+(d.cached||0),0);
     $('#st-requests').textContent=fmtNum(s.requests);
     $('#st-errors').textContent=fmtNum(s.errors);
-    $('#st-intok').textContent=fmtNum(sumIn);
-    $('#st-outtok').textContent=fmtNum(sumOut);
-    $('#st-cached').textContent=fmtNum(sumCached);
+    $('#st-intok').textContent=fmtTok(sumIn);
+    $('#st-outtok').textContent=fmtTok(sumOut);
+    $('#st-cached').textContent=fmtTok(sumCached);
     $('#st-hitrate').textContent=sumIn?((sumCached/sumIn)*100).toFixed(1)+'%':'-';
     $('#st-uptime').textContent=fmtDur(s.uptime);
     $('#st-rps').textContent=((s.requests||0)/(s.uptime||1)).toFixed(2);
-// Token distribution (aggregated across all days)
-    const D={tools:0,system:0,history:0,user:0,reasoning:0,text:0,tool:0};
-    for(const v of Object.values(s.daily||{})){ for(const k of Object.keys(D)) D[k]+=(v.dist&&v.dist[k])||0; }
-    const dTot=Object.values(D).reduce((a,b)=>a+b,0);
-    const DN={tools:'工具定义',system:'系统提示',history:'对话历史',user:'用户输入',reasoning:'思考内容',text:'正文',tool:'ToolCall'};
-    const bar=(pct,label,val)=>`<div style="margin:6px 0"><div style="display:flex;justify-content:space-between;font-size:12px"><span>${esc(label)}</span><span class="mono" style="opacity:.8">${fmtNum(val)} · ${pct.toFixed(1)}%</span></div><div style="height:6px;border-radius:3px;background:var(--md-sys-color-surface-container-highest,#333);overflow:hidden"><div style="height:100%;width:${Math.max(pct,0.5)}%;background:var(--md-sys-color-primary)"></div></div></div>`;
-    $('#st-dist').innerHTML=dTot?Object.keys(DN).map(k=>bar(D[k]/dTot*100,DN[k],D[k])).join(''):'<div class="empty" style="padding:8px 0">暂无分布数据(需有请求流过)</div>';
-    // by model
-    const mRows=models.map(([m,d])=>({m,...d,sum:(d.inputTokens||0)+(d.outputTokens||0)})).sort((a,b)=>b.sum-a.sum);
-    const mTot=mRows.reduce((t,r)=>t+r.sum,0)||1;
-    $('#st-model').innerHTML=mRows.length?mRows.slice(0,12).map(r=>bar(r.sum/mTot*100,r.m,r.sum)).join(''):'<div class="empty" style="padding:8px 0">暂无数据</div>';
-    // daily usage
-    const days=Object.entries(s.daily||{}).sort((a,b)=>b[0].localeCompare(a[0])).slice(0,14);
-    $('#st-daily tbody').innerHTML=days.length?days.map(([d,v])=>
-      `<tr><td class="mono">${esc(d)}</td><td>${fmtNum(v.requests)}</td><td>${fmtNum(v.inputTokens)}</td><td>${fmtNum(v.outputTokens)}</td><td>${fmtNum(v.cached)}</td></tr>`).join('')
-      :'<tr><td colspan="5" class="empty">暂无数据</td></tr>';
-    $('#st-table tbody').innerHTML=chs.length?chs.map(([n,d])=>
-      `<tr><td class="mono truncate" title="${escAttr(n)}">${esc(n)}</td><td>${fmtNum(d.requests)}</td><td>${fmtNum(d.inputTokens)}</td><td>${fmtNum(d.outputTokens)}</td></tr>`).join('')
-      :'<tr><td colspan="4" class="empty">暂无数据</td></tr>';
-// Charts (plain canvas, no third-party libs)
+// Token distribution, aggregated across every day
+    const D={}; for(const k of DIST_KEYS) D[k]=0;
+    for(const v of Object.values(s.daily||{})){ for(const k of DIST_KEYS) D[k]+=(v.dist&&v.dist[k])||0; }
+    const dTot=DIST_KEYS.reduce((t,k)=>t+D[k],0);
+    $('#st-dist-note').textContent=dTot?' · 合计 '+fmtTok(dTot)+' tokens':'';
+    const dist=DIST_KEYS.map(k=>({name:DIST_LABEL[k],value:D[k]})).filter(r=>r.value>0).sort((a,b)=>b.value-a.value);
+    const models=bm.map(([m,d])=>({name:m,value:(d.inputTokens||0)+(d.outputTokens||0),requests:d.requests||0})).sort((a,b)=>b.value-a.value);
     const daily=Object.entries(s.daily||{}).sort((x,y)=>x[0].localeCompare(y[0])).slice(-14)
       .map(([d,v])=>({label:String(d).slice(5),in:v.inputTokens||0,out:v.outputTokens||0}));
-    Store.charts={daily, models:mRows.map(r=>({name:r.m,sum:r.sum}))};
-    drawDailyChart(daily); drawModelChart(Store.charts.models);
+    Store.charts={daily, models, dist};
+    syncChartTabs(); drawAllCharts();
   }catch(e){
-    if(e.name==='AbortError'){ if(stTimedOut) $('#st-table tbody').innerHTML='<tr><td colspan="4" class="empty">读取超时，正在重试…</td></tr>'; }
+    if(e.name==='AbortError'){ if(stTimedOut) $('#st-requests').textContent='超时'; }
     else snack(e.message,true);
   }
   finally{ stDisarm(); Store._stBusy=false; }
 }
 
-// ============ Render: request log ============
-async function renderRequests(){
-  const signal=Store.abort('requests');
-  const cur = await fillInstSelect($('#topInst'), Store.inst, signal); Store.inst=cur;
-  try{
-    const [reqs,cfg]=await Promise.all([adapter.getRequests(cur,signal), adapter.getConfig(cur,signal)]);
-    const rec=cfg.record||{};
-    $('#rq-rec-enable').selected=!!rec.enable;
-    $('#rq-rec-server').value=rec.server||'';
-    $('#rq-table tbody').innerHTML=(reqs||[]).map(r=>{
-      const tp=String(r.time||'').split(' ');
-      return `<tr>
+// ============ Render: logs (merged with the request record) ============
+// Last record settings read from (or written to) the instance; used to skip saving when nothing changed
+let rqSaved={enable:false,server:''};
+let rqSaving=false, rqPending=false;
+function renderReqRows(reqs){
+  const rows=(reqs||[]).map(r=>{
+    const tp=String(r.time||'').split(' ');
+    return `<tr>
       <td class="mono"><span class="rq-date">${esc(tp[0]||'')} </span>${esc(tp[1]||tp[0]||'')}</td>
       <td class="mono truncate" title="${escAttr(r.model)}">${esc(r.model)}</td>
       <td class="mono truncate" title="${escAttr(r.channel)}">${esc(r.channel)}</td>
-      <td title="HTTP ${r.status}">${r.status===200?'<span style="color:#4CAF50">✓</span>':'<span style="color:var(--md-sys-color-error)">✗</span>'}<span class="mono" style="font-size:11px">${r.status}</span></td>
-      <td class="mono" style="font-size:11px">${r.duration}ms</td>
-      <td>${r.id?`<button type="button" class="icon-act" data-action="viewBody" data-id="${escAttr(r.id)}" title="查看正文"><span class="msym">article</span></button>`:''}</td></tr>`;}).join('') || '<tr><td colspan="6" class="empty">暂无记录</td></tr>';
-  }catch(e){ if(e.name!=='AbortError') snack(e.message,true); }
+      <td title="HTTP ${r.status}">${r.status===200?'<span style="color:#4CA2A0">✓</span>':'<span style="color:var(--md-sys-color-error)">✗</span>'}<span class="mono" style="font-size:9px">${r.status}</span></td>
+      <td class="mono" style="font-size:9px">${r.duration}ms</td>
+      <td>${r.id?`<button type="button" class="icon-act" data-action="viewBody" data-id="${escAttr(r.id)}" title="查看正文"><span class="msym">article</span></button>`:''}</td></tr>`;
+  }).join('');
+  const html = rows || `<tr><td colspan="6" class="empty">${rqSaved.enable?'暂无记录':'记录已关闭，开启后这里会显示请求'}</td></tr>`;
+  const tb = $('#rq-table tbody');
+  if(tb.dataset.sig !== html){ tb.dataset.sig = html; tb.innerHTML = html; }
 }
-// Save recording settings (switch/server address)
-async function saveRecCfg(){
+let lgInst=null;  // instance whose log is currently on screen
+async function renderLogs(){
+  const signal=Store.abort('logs');
+  const cur = await fillInstSelect($('#topInst'), Store.inst, signal); Store.inst=cur;
+  const box=$('#lg-box');
+  // Same instance: keep the text on screen while refetching. Blanking it to "加载中…" makes the pane
+  // collapse and the whole page jump; only a real instance switch clears it.
+  if(lgInst!==cur){ lgInst=cur; box.textContent='加载中…'; }
   try{
-    await adapter.saveConfig(Store.inst,{record:{enable:!!$('#rq-rec-enable').selected, server:($('#rq-rec-server').value||'').trim()}});
+    const lines=+($('#lg-lines').value||100);
+    const [txt,cfg,reqs]=await Promise.all([
+      adapter.getLogs(cur,lines,signal).catch(e=>{ if(e.name==='AbortError') throw e; return '读取失败: '+e.message; }),
+      adapter.getConfig(cur,signal).catch(e=>{ if(e.name==='AbortError') throw e; return null; }),
+      adapter.getRequests(cur,signal).catch(e=>{ if(e.name==='AbortError') throw e; return []; }),
+    ]);
+    const next=txt||'(空)';
+    // Replace in place only when the text really changed: identical content leaves scroll and layout untouched
+    if(box.textContent!==next){
+      const stick=(box.scrollHeight-box.scrollTop-box.clientHeight)<24;
+      const top=box.scrollTop;
+      box.textContent=next;
+      box.scrollTop = stick ? box.scrollHeight : Math.min(top, Math.max(0, box.scrollHeight-box.clientHeight));
+    }
+    if(cfg){
+      const rec=cfg.record||{};
+      rqSaved={enable:!!rec.enable,server:rec.server||''};
+      $('#lg-rec-enable').selected=rqSaved.enable;
+      $('#lg-rec-server').value=rqSaved.server;
+    }
+    renderReqRows(reqs);
+  }catch(e){ if(e.name!=='AbortError'){ box.textContent='读取失败: '+e.message; } }
+}
+// Record settings save themselves on change (no save button); an unchanged value returns early so a mere focus/blur does not restart the instance.
+// Switch and address can land in the same tick (typing then tapping the switch): the second call is queued, not dropped, and re-reads both fields.
+async function saveRecCfg(){
+  if(rqSaving){ rqPending=true; return; }
+  const next={enable:!!$('#lg-rec-enable').selected, server:($('#lg-rec-server').value||'').trim()};
+  if(next.enable===rqSaved.enable && next.server===rqSaved.server) return;
+  rqSaving=true;
+  try{
+    await adapter.saveConfig(Store.inst,{record:next});
+    rqSaved=next;
     snack('记录设置已保存');
+    await renderLogs();
   }catch(e){ snack(e.message,true); }
+  finally{ rqSaving=false; if(rqPending){ rqPending=false; saveRecCfg(); } }
 }
 // Fetch a request/response body by id from the record file and show it in a dialog
 async function viewRecordBody(id){
-  openDialog('请求正文', '<div style="padding:8px">加载中…</div>', {okText:'关闭', cancel:false});
+  openDialog('请求正文', '<div style="padding:4px">加载中…</div>', {okText:'关闭', cancel:false});
   try{
     const d=await adapter.getRecordBody(Store.inst,id);
     const r=d.record||{};
     const fmt=v=>typeof v==='string'?v:JSON.stringify(v,null,2);
     $('#dlgBody').innerHTML='<div class="rec-meta mono">'+esc(r.time||'')+' · '+esc(r.model||'')+' · 渠道 '+esc(r.channel||'-')+' · 状态 '+(r.status??'')+' · '+(r.duration||0)+'ms · tokens '+(r.inputTokens||0)+'/'+(r.outputTokens||0)+'</div>'
-      +'<div style="font-size:13px;font-weight:600">请求</div><pre class="rec-pre mono">'+esc(fmt(r.request??'(无)'))+'</pre>'
-      +'<div style="font-size:13px;font-weight:600">响应</div><pre class="rec-pre mono">'+esc(fmt(r.response??'(无)'))+'</pre>';
-  }catch(e){ $('#dlgBody').innerHTML='<div style="padding:8px;color:var(--md-sys-color-error)">'+esc(e.message)+'</div>'; }
-}
-
-// ============ Render: logs ============
-async function renderLogs(){
-  const signal=Store.abort('logs');
-  const cur = await fillInstSelect($('#topInst'), Store.inst, signal); Store.inst=cur;
-  const box=$('#lg-box'); box.textContent='加载中…';
-  try{
-    const lines=+($('#lg-lines').value||100);
-    const txt=await adapter.getLogs(cur,lines,signal);
-    box.textContent=txt||'(空)';
-    box.scrollTop=box.scrollHeight;
-  }catch(e){ if(e.name!=='AbortError'){ box.textContent='读取失败: '+e.message; } }
-}
-
-// ============ Render: chat ============
-let chatStick=true;
-const chatNow=()=>new Date().toTimeString().slice(0,5);
-const chatAtBottom=()=>{ const b=$('#ch-messages'); return b?(b.scrollHeight-b.scrollTop-b.clientHeight<80):true; };
-function chatUpdateJump(){ const j=$('#ch-jump'); if(j) j.classList.toggle('hidden', !( !chatStick && Store.chat.messages.length>0 )); }
-function renderChatMessages(force){
-  const box=$('#ch-messages'); if(!box) return;
-  chatStick = force ? true : chatAtBottom();
-  const msgs=Store.chat.messages;
-  if(!msgs.length){ box.innerHTML='<div class="empty" style="margin:auto">选择模型，输入消息后回车发送</div>'; chatUpdateJump(); return; }
-  box.innerHTML=msgs.map((m,i)=>{
-    const isUser=m.role==='user';
-    const cur=(!isUser&&Store.chat.streaming&&i===msgs.length-1)?' chat-cursor':'';
-    return `<div class="chat-msg ${isUser?'user':'ai'}">
-      <div class="chat-ava" aria-hidden="true">${isUser?'<span class="msym">person</span>':'<span class="msym">smart_toy</span>'}</div>
-      <div class="chat-body">
-        <div class="chat-meta"><span class="who">${isUser?'你':'助手'}</span>${m.t?`<span>${esc(m.t)}</span>`:''}
-          <button class="chat-copy" type="button" data-copy="${i}" aria-label="复制第 ${i+1} 条消息">复制</button></div>
-        <div class="chat-bubble${cur}">${esc(m.content)||'<span style="opacity:.5">…</span>'}</div>
-      </div></div>`;
-  }).join('');
-  if(chatStick) box.scrollTop=box.scrollHeight;
-  chatUpdateJump();
-}
-async function renderChat(){
-  const signal=Store.abort('chat');
-  const cur = await fillInstSelect($('#topInst'), Store.chat.inst||Store.inst, signal);
-  Store.chat.inst=cur; Store.inst=cur;
-  await fillChatModels($('#ch-model'), cur);
-  renderChatMessages(true);
-}
-async function copyText(t){
-  try{ if(navigator.clipboard&&window.isSecureContext){ await navigator.clipboard.writeText(t); snack('已复制'); return; } throw 0; }
-  catch(e){ const ta=document.createElement('textarea'); ta.value=t; ta.setAttribute('readonly','');
-    ta.style.cssText='position:fixed;top:0;left:0;opacity:0'; document.body.appendChild(ta); ta.select();
-    let ok=false; try{ ok=document.execCommand('copy'); }catch(_){}
-    document.body.removeChild(ta); ok?snack('已复制'):snack('复制失败（需 HTTPS 或手动长按选择）',true); }
-}
-async function sendChat(){
-  const inp=$('#ch-input'), text=String(inp.value||'').trim();
-  if(!text) return;
-  const model=$('#ch-model').value;
-  if(!model){ snack('请先选择模型',true); return; }
-  const stream=$('#ch-stream').selected;
-  inp.value='';
-  Store.chat.messages.push({role:'user',content:text,t:chatNow()});
-  renderChatMessages(true);
-  const btn=$('#ch-send'); btn.disabled=true; btn.textContent='…';
-  try{
-    const res=await adapter.chat({model,messages:Store.chat.messages.slice(),stream,instance:Store.chat.inst});
-    if(stream){
-      Store.chat.streaming=true;
-      Store.chat.messages.push({role:'assistant',content:'',t:chatNow()});
-      renderChatMessages(true);
-      const reader=res.body.getReader(), dec=new TextDecoder();
-      let buf='',ai='';
-      while(true){ const {done,value}=await reader.read(); if(done)break;
-        buf+=dec.decode(value,{stream:true}); const ls=buf.split('\n'); buf=ls.pop();
-        for(const line of ls){
-          const d=line.startsWith('data: ')?line.slice(6):(line.startsWith('data:')?line.slice(5):null);
-          if(!d||d.trim()==='[DONE]')continue;
-          try{ const j=JSON.parse(d); const delta=j.choices?.[0]?.delta?.content||j.choices?.[0]?.message?.content;
-            if(delta){ ai+=delta; Store.chat.messages.at(-1).content=ai; renderChatMessages(); } }catch(_){}
-        } }
-      if(!ai) Store.chat.messages.at(-1).content='(空响应)';
-    }else{
-      const data=await res.json();
-      Store.chat.messages.push({role:'assistant',content:data.choices?.[0]?.message?.content||'(空响应)',t:chatNow()});
-    }
-  }catch(e){ snack('聊天失败: '+e.message,true); Store.chat.messages.push({role:'assistant',content:'⚠️ '+e.message,t:chatNow()}); }
-  finally{ Store.chat.streaming=false; btn.disabled=false; btn.textContent='发送'; renderChatMessages(); try{inp.focus();}catch(_){} }
+      +'<div style="font-size:10px;font-weight:600">请求</div><pre class="rec-pre mono">'+esc(fmt(r.request??'(无)'))+'</pre>'
+      +'<div style="font-size:10px;font-weight:600">响应</div><pre class="rec-pre mono">'+esc(fmt(r.response??'(无)'))+'</pre>';
+  }catch(e){ $('#dlgBody').innerHTML='<div style="padding:4px;color:var(--md-sys-color-error)">'+esc(e.message)+'</div>'; }
 }
 
 // ============ Dialogs ============
@@ -939,13 +953,13 @@ function applyTheme(t){
 function loadTheme(){try{const t=JSON.parse(localStorage.getItem('agw-theme')||'{}');if(t.mode)applyTheme(t);else applyTheme({mode:'dark',seed:'#6750A4'});}catch(_){applyTheme({mode:'dark',seed:'#6750A4'});}}
 function saveTheme(){localStorage.setItem('agw-theme',JSON.stringify(themeState));}
 function openThemeDialog(){
-  openDialog('主题',`<div style="display:flex;flex-direction:column;gap:16px;padding-top:8px">
-    <label style="display:flex;align-items:center;gap:10px"><md-switch id="th-dark" ${themeState.mode==='dark'?'selected':''}></md-switch><span style="font-size:14px">深色主题</span></label>
-    <div><div style="font-size:13px;color:var(--md-sys-color-on-surface-variant);margin-bottom:8px">主色 (Material You)</div>
-    <div id="th-swatches" style="display:flex;gap:8px;flex-wrap:wrap"></div>
-    <div style="display:flex;align-items:center;gap:8px;margin-top:10px"><button type="button" class="btn sm outline" id="th-mdu">从手机取色</button><span style="font-size:13px;color:var(--md-sys-color-on-surface-variant)">Material You 壁纸色</span><input type="color" id="th-custom" value="${themeState.seed}" style="width:40px;height:36px;border:none;border-radius:8px;cursor:pointer;background:none"><span style="font-size:13px;color:var(--md-sys-color-on-surface-variant)">自定义颜色</span></div></div>
+  openDialog('主题',`<div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
+    <label style="display:flex;align-items:center;gap:4px"><md-switch id="th-dark" ${themeState.mode==='dark'?'selected':''}></md-switch><span style="font-size:11px">深色主题</span></label>
+    <div><div style="font-size:10px;color:var(--md-sys-color-on-surface-variant);margin-bottom:4px">主色 (Material You)</div>
+    <div id="th-swatches" style="display:flex;gap:4px;flex-wrap:wrap"></div>
+    <div style="display:flex;align-items:center;gap:4px;margin-top:4px"><button type="button" class="btn sm outline" id="th-mdu">从手机取色</button><span style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">Material You 壁纸色</span><input type="color" id="th-custom" value="${themeState.seed}" style="width:32px;height:29px;border:none;border-radius:8px;cursor:pointer;background:none"><span style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">自定义颜色</span></div></div>
   </div>`,{okText:'完成',cancel:false});
-  const sw=$('#th-swatches');if(sw)sw.innerHTML=SWATCHES.map(c=>`<button type="button" class="th-swatch" data-c="${c}" style="width:36px;height:36px;border-radius:50%;border:2px solid ${c===themeState.seed?'var(--md-sys-color-on-surface)':'transparent'};background:${c};cursor:pointer;padding:0"></button>`).join('');
+  const sw=$('#th-swatches');if(sw)sw.innerHTML=SWATCHES.map(c=>`<button type="button" class="th-swatch" data-c="${c}" style="width:29px;height:29px;border-radius:50%;border:2px solid ${c===themeState.seed?'var(--md-sys-color-on-surface)':'transparent'};background:${c};cursor:pointer;padding:0"></button>`).join('');
   const dk=$('#th-dark');if(dk)dk.addEventListener('click',()=>setTimeout(()=>{applyTheme({mode:dk.selected?'dark':'light',seed:themeState.seed});saveTheme();},0));
   if(sw)sw.addEventListener('click',e=>{const b=e.target.closest('.th-swatch');if(b){applyTheme({mode:themeState.mode,seed:b.dataset.c});saveTheme();sw.querySelectorAll('.th-swatch').forEach(s=>s.style.borderColor=s.dataset.c===themeState.seed?'var(--md-sys-color-on-surface)':'transparent');}});
   const cu=$('#th-custom');if(cu)cu.addEventListener('input',e=>{applyTheme({mode:themeState.mode,seed:e.target.value});saveTheme();});
@@ -1035,7 +1049,7 @@ function keyDlgVisible(){ return !$('#dlgOverlay').hidden && $('#dlgTitle').text
 function openKeyDialog(){
   if(keyDlgVisible()) return;
   openDialog('管理令牌', `
-    <div style="display:flex;flex-direction:column;gap:14px;padding-top:8px">
+    <div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
       <md-outlined-text-field data-f="key" label="管理 API 令牌(可选)" type="password" value="${escAttr(localStorage.getItem('agw-admin-key')||'')}"
         helper="面板登录请用 agw web login 的一次性链接; 这里只用于脚本/API 的 webToken"></md-outlined-text-field>
     </div>`, {okText:'保存', onOk:saveKey});
@@ -1054,7 +1068,7 @@ function renderMmChips(){
     '<span class="mm-chip" data-i="'+i+'"><span class="nm">'+esc(k)+'</span>'
     +(k===v?'':'<span class="arrow">→</span><span class="nm">'+esc(v)+'</span>')
     +'<button class="mm-x" data-i="'+i+'" aria-label="删除">✕</button></span>').join('')
-    :'<span style="font-size:12px;color:var(--md-sys-color-on-surface-variant)">暂无映射 — 填上方两框后点 + 添加 (左滑标签或点 ✕ 删除)</span>';
+    :'<span style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">暂无映射 — 填上方两框后点 + 添加 (左滑标签或点 ✕ 删除)</span>';
 }
 function mmAdd(){
   const a=($('#mm-alias').value||'').trim(), r=($('#mm-real').value||'').trim();
@@ -1094,18 +1108,18 @@ function mmShowModelPicker(list){
   const oldBox=$('#mmSelBox'); if(oldBox) oldBox.remove();
   const box=document.createElement('div');
   box.id='mmSelBox';
-  box.style.cssText='border:1px solid var(--md-sys-color-outline-variant);border-radius:12px;padding:10px;max-height:230px;overflow-y:auto';
+  box.style.cssText='border:1px solid var(--md-sys-color-outline-variant);border-radius:10px;padding:8px;max-height:184px;overflow-y:auto';
   const head=document.createElement('div');
-  head.style.cssText='display:flex;align-items:center;gap:8px;margin-bottom:6px';
-  head.innerHTML='<span style="font-size:12px;color:var(--md-sys-color-on-surface-variant)">已获取 '+list.length+' 个, 勾选后填入</span>'
-    +'<button type="button" class="pbtn pbtn-text" id="mmSelAll" style="height:26px;padding:0 10px;margin-left:auto">全选</button>'
-    +'<button type="button" class="pbtn pbtn-text" id="mmSelNone" style="height:26px;padding:0 10px">清空</button>'
-    +'<button type="button" class="pbtn pbtn-filled" id="mmSelOk" style="height:26px;padding:0 12px">填入</button>'
-    +'<button type="button" class="pbtn pbtn-text" id="mmSelX" style="height:26px;padding:0 8px" aria-label="关闭">✕</button>';
+  head.style.cssText='display:flex;align-items:center;gap:4px;margin-bottom:4px';
+  head.innerHTML='<span style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">已获取 '+list.length+' 个, 勾选后填入</span>'
+    +'<button type="button" class="pbtn pbtn-text" id="mmSelAll" style="height:21px;padding:0 12px;margin-left:auto">全选</button>'
+    +'<button type="button" class="pbtn pbtn-text" id="mmSelNone" style="height:21px;padding:0 12px">清空</button>'
+    +'<button type="button" class="pbtn pbtn-filled" id="mmSelOk" style="height:21px;padding:0 12px">填入</button>'
+    +'<button type="button" class="pbtn pbtn-text" id="mmSelX" style="height:21px;padding:0 8px" aria-label="关闭">✕</button>';
   box.appendChild(head);
   list.forEach(m=>{
     const lab=document.createElement('label');
-    lab.style.cssText='display:flex;align-items:center;gap:6px;font-size:13px;padding:2px 0;cursor:pointer';
+    lab.style.cssText='display:flex;align-items:center;gap:4px;font-size:10px;padding:2px 0;cursor:pointer';
     const cb=document.createElement('input'); cb.type='checkbox'; cb.className='mm-sel'; cb.value=m; cb.checked=true;
     const sp=document.createElement('span'); sp.className='mono'; sp.textContent=m; sp.style.cssText='word-break:break-all';
     lab.appendChild(cb); lab.appendChild(sp); box.appendChild(lab);
@@ -1131,16 +1145,18 @@ function mmShowModelPicker(list){
 }
 let providerDlgOrigName='';        // 打开渠道弹窗时的原渠道名(用于改名)
 let providerDlgOrigUseResponses;   // the original useResponses (undefined = unset/auto passthrough; submitted only when the user flips it)
+let providerDlgOrigParamOverride;         // 打开弹窗时该渠道已有的参数覆写(undefined=没有), 用来区分「清空」与「不提交」
 function openProviderDialog(ch){
   const c=ch||{name:'',type:'openai',baseUrl:'',proxy:'-',models:[],apiKey:'',default:false};
   providerDlgOrigName=ch?ch.name:'';
   providerDlgOrigUseResponses=ch?ch.useResponses:undefined;
+  providerDlgOrigParamOverride=ch?ch.paramOverride:undefined;
   mmList=(c.modelMap?Object.entries(c.modelMap):[]);
   const pxs=Object.keys((Store.configs.get(Store.inst)||{}).proxies||{});
   const pOpts=['-'].concat(pxs); if(c.proxy&&!pOpts.includes(c.proxy)) pOpts.push(c.proxy);
   const curP=c.proxy||'-';
   openDialog(ch?'编辑渠道':'添加渠道', `
-    <div style="display:flex;flex-direction:column;gap:14px;padding-top:8px">
+    <div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
       <md-outlined-text-field data-f="name" label="名称" value="${escAttr(c.name)}" required></md-outlined-text-field>
       <md-outlined-select data-f="type" label="类型" style="width:100%">
         ${['openai','claude','gemini'].map(t=>`<md-select-option value="${t}" ${t===c.type?'selected':''}>${t}</md-select-option>`).join('')}
@@ -1152,8 +1168,9 @@ function openProviderDialog(ch){
       </md-outlined-select>
       <md-outlined-text-field data-f="models" label="模型(逗号分隔)" value="${escAttr((c.models||[]).join(', '))}"></md-outlined-text-field>
       <md-outlined-text-field data-f="delayMs" label="请求延迟(毫秒, 0=关闭)" type="number" value="${escAttr(String(c.delayMs||0))}" helper="每个请求发出前等待这么久; 同渠道并发请求按此间隔排队发出, 可缓解 429 限流"></md-outlined-text-field>
+      <md-outlined-text-field data-f="paramOverride" label="参数覆写 (JSON, 留空=不覆写)" type="textarea" rows="3" value="${escAttr(c.paramOverride?JSON.stringify(c.paramOverride,null,2):'')}" helper="覆写最终发往上游的请求体, 盖过 SDK 同名参数; 对象深合并, 数组整体替换, null=删除该参数; 键名按渠道方言(openai/claude/gemini)写"></md-outlined-text-field>
       <div>
-        <div style="font-size:12px;color:var(--md-sys-color-on-surface-variant);margin-bottom:4px">模型改名 (对外名 → 真实名; 右框留空=按原名提供; 手机上左滑标签可删除; 对外名会出现在 /v1/models; 重启实例后生效)</div>
+        <div style="font-size:10px;color:var(--md-sys-color-on-surface-variant);margin-bottom:4px">模型改名 (对外名 → 真实名; 右框留空=按原名提供; 手机上左滑标签可删除; 对外名会出现在 /v1/models; 重启实例后生效)</div>
         <div class="mm-row">
           <md-outlined-text-field id="mm-alias" label="覆盖名(对外)"></md-outlined-text-field>
           <md-outlined-text-field id="mm-real" label="原始名(可空)"></md-outlined-text-field>
@@ -1162,13 +1179,13 @@ function openProviderDialog(ch){
         <div class="mm-chips" id="mmChips"></div>
       </div>
       <md-outlined-text-field data-f="apiKey" label="API Key" type="password" value="${escAttr(c.apiKey||'')}" placeholder="${c.hasKey?'(已设, 留空不改)':'API Key'}"></md-outlined-text-field>
-      <label style="display:flex;align-items:center;gap:8px;font-size:14px"><md-checkbox data-f="useResponses" ${c.useResponses?'selected':''}></md-checkbox>上游用 Responses API <span class="muted small">(仅 openai 类型; 不勾=自动: Responses 客户端直通 /v1/responses, Chat 客户端直通 chat)</span></label>
-      <label style="display:flex;align-items:center;gap:8px;font-size:14px"><md-checkbox data-f="probe" ${c.probe?'selected':''}></md-checkbox>参与成功率探测 <span class="muted small">(需实例开启 probe; 用户端可见成功率)</span></label>
+      <label style="display:flex;align-items:center;gap:4px;font-size:11px"><md-checkbox data-f="useResponses" ${c.useResponses?'selected':''}></md-checkbox>上游用 Responses API <span class="muted small">(仅 openai 类型; 不勾=自动: Responses 客户端直通 /v1/responses, Chat 客户端直通 chat)</span></label>
+      <label style="display:flex;align-items:center;gap:4px;font-size:11px"><md-checkbox data-f="probe" ${c.probe?'selected':''}></md-checkbox>参与成功率探测 <span class="muted small">(需实例开启 probe; 用户端可见成功率)</span></label>
       <div class="muted small" style="margin-top:4px">上游余额 (列表里 💰 按钮查; 三项留空 = 用内置预设)</div>
       <md-outlined-text-field data-f="balanceUrl" label="余额接口 URL (可相对 Base URL)" value="${escAttr(c.balanceUrl||'')}" placeholder="/v1/user/info"></md-outlined-text-field>
       <md-outlined-text-field data-f="balancePath" label="取值路径 (点路径)" value="${escAttr(c.balancePath||'')}" placeholder="data.balance"></md-outlined-text-field>
       <md-outlined-text-field data-f="balanceUnit" label="单位 (可选)" value="${escAttr(c.balanceUnit||'')}" placeholder="CNY"></md-outlined-text-field>
-      <label style="display:flex;align-items:center;gap:8px;font-size:14px"><md-checkbox data-f="default" ${c.default?'selected':''}></md-checkbox>设为默认渠道</label>
+      <label style="display:flex;align-items:center;gap:4px;font-size:11px"><md-checkbox data-f="default" ${c.default?'selected':''}></md-checkbox>设为默认渠道</label>
     </div>`, {onOk:saveProvider});
   const s=$('#dlgBody [data-f=type]');
   s.updateComplete.then(()=>Promise.all([...s.querySelectorAll('md-select-option')].map(o=>o.updateComplete||0))).then(()=>s.value=c.type);
@@ -1177,6 +1194,9 @@ function openProviderDialog(ch){
   const cb=$('#dlgBody [data-f=default]'); if(c.default) cb.selected=true;
   const ur=$('#dlgBody [data-f=useResponses]'); if(c.useResponses) ur.selected=true;
   const pr=$('#dlgBody [data-f=probe]'); if(c.probe) pr.selected=true;
+  // JSON 覆写按原文换行展示(属性里的换行会被压成空格, 这里补回可读格式)
+  const ovEl=$('#dlgBody [data-f=paramOverride]');
+  if(ovEl) ovEl.value=c.paramOverride?JSON.stringify(c.paramOverride,null,2):'';
   const ma=$('#mm-alias');
   if(ma){
     $('#mm-add').addEventListener('click',mmAdd);
@@ -1206,11 +1226,11 @@ function openProviderDialog(ch){
 function openPortDialog(name){
   const i=Store.instances.find(x=>x.name===name)||{};
   openDialog(name?'编辑实例 '+name:'新建实例', `
-    <div style="display:flex;flex-direction:column;gap:14px;padding-top:8px">
+    <div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
       <md-outlined-text-field data-f="name" label="实例名" value="${escAttr(i.name||'')}" ${(name==='default')?'disabled':''} required helper="${name?(name==='default'?'主实例不能改名':'改名会同步改配置文件名, 热生效'):'只能含字母/数字/中划线/下划线'}"></md-outlined-text-field>
       <md-outlined-text-field data-f="port" label="端口" type="number" value="${i.port||16390}" helper="${(i.tlsOn||(name&&name!=='default'))?'开 HTTPS 的实例只经主端口访问, 此端口仅作标识':'监听端口(开 HTTPS 后只提供 https)'}"></md-outlined-text-field>
       <md-outlined-text-field data-f="webToken" label="访问令牌" type="password" value="" helper="留空保存=清除访问令牌"></md-outlined-text-field>
-      <label style="display:flex;align-items:center;gap:8px;font-size:14px"><md-switch data-f="tls" ${i.tlsOn?'selected':''}></md-switch>启用 HTTPS</label>
+      <label style="display:flex;align-items:center;gap:4px;font-size:11px"><md-switch data-f="tls" ${i.tlsOn?'selected':''}></md-switch>启用 HTTPS</label>
       ${(name&&name!=='default'&&name!==Store.currentName)?`<md-text-button data-action="delInstance" data-name="${escAttr(name)}" style="color:var(--md-sys-color-error);align-self:flex-start;margin-top:2px">删除实例</md-text-button>`:''}
     </div>`, {onOk:()=>savePortSettings(name)});
 if(name){ // edit mode: fetch the real config to backfill port/TLS/admin password (revealed in plaintext, WYSIWYG)
@@ -1284,7 +1304,7 @@ function openProxyDialog(name){
   const cur=Store.configs.get(Store.inst);
   const p=(cur&&cur.proxies&&cur.proxies[name])||{};
   openDialog(name?'编辑代理 '+name:'添加代理', `
-    <div style="display:flex;flex-direction:column;gap:14px;padding-top:8px">
+    <div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
       <md-outlined-text-field data-f="name" label="名称" value="${escAttr(name||'')}" ${name?'disabled':''} required helper="渠道里用这个名字引用"></md-outlined-text-field>
       <md-outlined-select data-f="type" label="类型" style="width:100%">
         ${['socks5','http'].map(t=>`<md-select-option value="${t}" ${t===(p.type||'socks5')?'selected':''}>${t}</md-select-option>`).join('')}
@@ -1359,6 +1379,14 @@ async function saveProvider(){
   if(!!providerDlgOrigUseResponses!==urNow) ch.useResponses=urNow;
   const delayMs=Math.max(0,Math.min(120000,+v.delayMs||0));
 if(delayMs) ch.delayMs=delayMs; // 0 = omit, clearing the old value
+// 参数覆写: 有内容=写入(必须是 JSON 对象); 留空且原来有=清空; 原来没有=不提交, 保持「未覆写」
+const ovText=String(v.paramOverride||'').trim();
+if(ovText){
+  let ov;
+  try{ ov=JSON.parse(ovText); }catch(e){ snack('参数覆写 JSON 有误: '+e.message,true); return false; }
+  if(!ov||typeof ov!=='object'||Array.isArray(ov)||!Object.keys(ov).length){ snack('参数覆写需为非空 JSON 对象',true); return false; }
+  ch.paramOverride=ov;
+}else if(providerDlgOrigParamOverride!==undefined) ch.paramOverride='';
 if(providerDlgOrigName && providerDlgOrigName!==ch.name) ch.oldName=providerDlgOrigName; // rename
 if(Object.keys(modelMap).length) ch.modelMap=modelMap; // never send an arrow-less empty map, so an existing one is not wiped
   try{ await adapter.saveChannel(Store.inst,ch);
@@ -1375,12 +1403,18 @@ async function saveKeys(){
   }catch(e){ snack(e.message,true); }
 }
 async function saveRouting(){
+  const ovText=String($('#rt-paramOverride').value||'').trim();
+  let paramOverride=null;
+  if(ovText){
+    try{ paramOverride=JSON.parse(ovText); }catch(e){ snack('参数覆写 JSON 有误: '+e.message,true); return; }
+    if(!paramOverride||typeof paramOverride!=='object'||Array.isArray(paramOverride)){ snack('参数覆写需为 JSON 对象',true); return; }
+  }
   try{
     await adapter.saveConfig(Store.inst,{routing:{
       maxRetry:+$('#rt-maxRetry').value||0, timeoutSec:+$('#rt-timeout').value||0, cooldownSec:+$('#rt-cooldown').value||0 },
-      redact:{enable:!!$('#rt-redact').selected, response:!!$('#rt-redactRes').selected,
-        extra:$('#rt-redactExtra').value.split('\n').map(x=>x.trim()).filter(Boolean)},
-      modelSync:{enable:!!$('#rt-modelSync').selected, intervalHours:+$('#rt-syncInterval').value||24}});
+      redact:{enable:!!$('#rt-redact').selected, response:!!$('#rt-redactRes').selected, extra:rtExtra.slice()},
+      modelSync:{enable:!!$('#rt-modelSync').selected, intervalHours:+$('#rt-syncInterval').value||24},
+      paramOverride});
     snack('已保存 (热重载生效)'); await renderRouting();
   }catch(e){ snack(e.message,true); }
 }
@@ -1465,80 +1499,211 @@ function cvCtx(id, h){
   const w=Math.max(160, Math.floor(cv.clientWidth||cv.parentElement?.clientWidth||320));
   cv.width=Math.round(w*dpr); cv.height=Math.round(h*dpr); cv.style.height=h+'px';
   const cx=cv.getContext('2d'); cx.setTransform(dpr,0,0,dpr,0,0); cx.clearRect(0,0,w,h);
-  cx.font='11px system-ui,-apple-system,"Noto Sans SC",sans-serif'; cx.textBaseline='middle';
+  chartFont(cx,11); cx.textBaseline='middle';
   return {cx,w,h};
 }
+function chartFont(cx,size,weight){
+  cx.font=(weight?weight+' ':'')+size+'px system-ui,-apple-system,"Noto Sans SC",sans-serif';
+}
 function cssVar(n, fb){ const v=getComputedStyle(document.documentElement).getPropertyValue(n).trim(); return v||fb; }
+// One unit scale for every counter: K / M / B, one decimal under 100, integers above.
+// Thresholds sit at xx9995 so a value never prints as "1000K" instead of rolling over to "1M".
 function shortNum(n){ n=Number(n)||0;
-  if(n>=1e9) return (n/1e9).toFixed(1)+'B';
-  if(n>=1e6) return (n/1e6).toFixed(1)+'M';
-  if(n>=1e3) return (n/1e3).toFixed(n>=1e4?0:1)+'K';
+  const a=Math.abs(n);
+  const fmt=(v,u)=> (v>=100?String(Math.round(v)):String(Math.round(v*10)/10))+u;
+  if(a>=999.5e6) return fmt(n/1e9,'B');
+  if(a>=999.5e3) return fmt(n/1e6,'M');
+  if(a>=1e3)     return fmt(n/1e3,'K');
   return String(Math.round(n));
 }
-function drawDailyChart(days){
-  const H=200, g=cvCtx('st-chart-daily',H); if(!g) return;
+function fitText(cx,s,maxW){
+  let t=String(s==null?'':s);
+  if(cx.measureText(t).width<=maxW) return t;
+  while(t.length>1 && cx.measureText(t+'…').width>maxW) t=t.slice(0,-1);
+  return t+'…';
+}
+// Slice/bar colours are derived from the current primary seed, so they follow the theme instead of being hard-coded
+function chartPalette(n){
+  const base=hexToHSL(cssVar('--md-sys-color-primary','#D0BCFF'));
+  const dark=(document.documentElement.dataset.theme||'dark')!=='light';
+  const sat=Math.max(30,Math.min(78,base.s||42));
+  const lit=dark?68:46;
+  n=Math.max(1,n);
+  return Array.from({length:n},(_,i)=>{
+    const h=((base.h+(i*360/n)*0.78)%360+360)%360;
+    return hslToHex(h, sat, dark?(i%2?lit+9:lit):(i%2?lit-9:lit));
+  });
+}
+
+// ---- 按日期用量: bars / line ----
+function drawDailyChart(days, mode){
+  const H=210, g=cvCtx('st-chart-daily',H); if(!g) return;
   const {cx,w,h}=g;
   const onSurf=cssVar('--md-sys-color-on-surface-variant','#9a9a9a');
   const prim=cssVar('--md-sys-color-primary','#D0BCFF'), tert=cssVar('--md-sys-color-tertiary','#EFB8C8');
-  const padL=42, padR=10, padT=20, padB=24, iw=w-padL-padR, ih=h-padT-padB;
-  if(!days.length){ cx.fillStyle=onSurf; cx.fillText('暂无数据 (需有请求流过)', padL, h/2); return; }
-  const max=Math.max(1, ...days.map(d=>Math.max(d.in,d.out)));
-  cx.strokeStyle=cssVar('--md-sys-color-outline-variant','#444'); cx.lineWidth=1;
+  const grid=cssVar('--md-sys-color-outline-variant','#444');
+  const padL=42, padR=10, padT=20, padB=24, iw=Math.max(24,w-padL-padR), ih=h-padT-padB;
+  if(!days||!days.length){ chartFont(cx,11); cx.fillStyle=onSurf; cx.fillText('暂无数据 (需有请求流过)', padL, h/2); return; }
+  const max=Math.max(1,...days.map(d=>Math.max(d.in||0,d.out||0)));
+  cx.strokeStyle=grid; cx.lineWidth=1;
+  chartFont(cx,10);
   for(let i=0;i<=3;i++){
     const y=Math.round(padT+ih*i/3)+.5;
     cx.beginPath(); cx.moveTo(padL,y); cx.lineTo(w-padR,y); cx.stroke();
-    cx.fillStyle=onSurf; cx.fillText(shortNum(max*(1-i/3)), 6, y);
+    cx.fillStyle=onSurf; cx.fillText(shortNum(max*(1-i/3)),6,y);
   }
-  const slot=iw/days.length, bw=Math.max(2, Math.min(9, slot/3.2));
-  days.forEach((d,i)=>{
-    const x=padL+slot*i;
-    [[d.in,prim],[d.out,tert]].forEach(([v,c],k)=>{
-      if(!(v>0)) return;
-      const bh=Math.max(2, ih*v/max);
+  const slot=iw/days.length;
+  const at=(i,v)=>[padL+slot*i+slot/2, padT+ih-ih*(v||0)/max];
+  if(mode==='line'){
+    [['in',prim],['out',tert]].forEach(([k,c])=>{
+      cx.strokeStyle=c; cx.lineWidth=2; cx.lineJoin='round';
+      cx.beginPath();
+      days.forEach((d,i)=>{ const [x,y]=at(i,d[k]); if(i) cx.lineTo(x,y); else cx.moveTo(x,y); });
+      cx.stroke();
       cx.fillStyle=c;
-      cx.fillRect(x+(slot-(bw*2+2))/2+k*(bw+2), padT+ih-bh, bw, bh);
+      days.forEach((d,i)=>{ const [x,y]=at(i,d[k]); cx.beginPath(); cx.arc(x,y,2.4,0,Math.PI*2); cx.fill(); });
     });
+  } else {
+    const bw=Math.max(2,Math.min(9,slot/3.2));
+    days.forEach((d,i)=>{
+      const x=padL+slot*i+(slot-(bw*2+2))/2;
+      [[d.in||0,prim],[d.out||0,tert]].forEach(([v,c],k)=>{
+        if(!(v>0)) return;
+        const bh=Math.max(2,ih*v/max);
+        cx.fillStyle=c; cx.fillRect(x+k*(bw+2), padT+ih-bh, bw, bh);
+      });
+    });
+  }
+  chartFont(cx,10);
+  days.forEach((d,i)=>{
     if(days.length<=8 || i%Math.ceil(days.length/6)===0){
       cx.fillStyle=onSurf; cx.textAlign='center';
-      cx.fillText(d.label, x+slot/2, padT+ih+12);
+      cx.fillText(d.label, padL+slot*i+slot/2, padT+ih+12);
       cx.textAlign='left';
     }
   });
-  cx.fillStyle=prim; cx.fillRect(w-padR-116, 3, 8, 8);
-  cx.fillStyle=onSurf; cx.fillText('输入', w-padR-104, 7);
-  cx.fillStyle=tert; cx.fillRect(w-padR-64, 3, 8, 8);
-  cx.fillStyle=onSurf; cx.fillText('输出', w-padR-52, 7);
+  chartFont(cx,10);
+  cx.fillStyle=prim; cx.fillRect(w-padR-108,2,8,8);
+  cx.fillStyle=onSurf; cx.fillText('输入', w-padR-97, 6);
+  cx.fillStyle=tert; cx.fillRect(w-padR-62,2,8,8);
+  cx.fillStyle=onSurf; cx.fillText('输出', w-padR-51, 6);
 }
-function drawModelChart(rows){
-  const H=200, g=cvCtx('st-chart-model',H); if(!g) return;
+
+// ---- 按模型用量: bars / pie ----
+function drawModelChart(rows, mode){
+  if(mode==='pie') return drawPieChart('st-chart-model', rows, {maxSlices:6});
+  return drawVBars('st-chart-model', rows, '暂无数据 (需有请求流过)');
+}
+
+// ---- Token 用途分布: horizontal bars / pie ----
+function drawDistChart(rows, mode){
+  if(mode==='pie') return drawPieChart('st-chart-dist', rows, {maxSlices:7});
+  return drawHBars('st-chart-dist', rows, '暂无分布数据 (需有请求流过)');
+}
+
+function drawVBars(id, rows, emptyText){
+  const H=210, g=cvCtx(id,H); if(!g) return;
   const {cx,w,h}=g;
   const onSurf=cssVar('--md-sys-color-on-surface-variant','#9a9a9a');
-  const prim=cssVar('--md-sys-color-primary','#D0BCFF');
+  const items=(rows||[]).filter(r=>(r.value||0)>0).slice(0,8);
+  if(!items.length){ chartFont(cx,11); cx.fillStyle=onSurf; cx.fillText(emptyText,12,h/2); return; }
+  const padL=10, padR=10, padT=20, padB=58, iw=Math.max(24,w-padL-padR), ih=h-padT-padB;
+  const max=Math.max(1,...items.map(r=>r.value));
+  const slot=iw/items.length, bw=Math.min(30,Math.max(6,slot*0.56));
+  const cols=chartPalette(items.length);
+  items.forEach((r,i)=>{
+    const x=padL+slot*i+(slot-bw)/2;
+    const bh=Math.max(2,ih*r.value/max);
+    cx.fillStyle=cols[i];
+    cx.fillRect(x, padT+ih-bh, bw, bh);
+    chartFont(cx,9);
+    cx.fillStyle=onSurf; cx.textAlign='center';
+    cx.fillText(shortNum(r.value), x+bw/2, padT+ih-bh-8);
+    cx.save();
+    cx.translate(x+bw/2, padT+ih+8);
+    cx.rotate(-Math.PI/4);
+    cx.textAlign='right';
+    cx.fillText(fitText(cx, r.name, 96), 0, 0);
+    cx.restore();
+  });
+}
+
+function drawHBars(id, rows, emptyText){
+  const H=210, g=cvCtx(id,H); if(!g) return;
+  const {cx,w,h}=g;
+  const onSurf=cssVar('--md-sys-color-on-surface-variant','#9a9a9a');
   const track=cssVar('--md-sys-color-surface-container-highest','#2a2a2a');
-  const top=(rows||[]).slice(0,8);
-  if(!top.length){ cx.fillStyle=onSurf; cx.fillText('暂无数据', 12, h/2); return; }
-  const max=Math.max(1, ...top.map(r=>r.sum));
-  const padL=Math.min(132, Math.max(64, w*0.32)), padR=56, padT=6, padB=6;
-  const ih=h-padT-padB, rowH=ih/top.length, barH=Math.min(16, rowH*0.55);
-  top.forEach((r,i)=>{
+  const items=(rows||[]).filter(r=>(r.value||0)>0).slice(0,8);
+  if(!items.length){ chartFont(cx,11); cx.fillStyle=onSurf; cx.fillText(emptyText,12,h/2); return; }
+  const max=Math.max(1,...items.map(r=>r.value));
+  const padL=Math.min(112,Math.max(62,w*0.32)), padR=64, padT=6, padB=6;
+  const ih=h-padT-padB, rowH=ih/items.length, barH=Math.min(15,rowH*0.55);
+  const cols=chartPalette(items.length);
+  items.forEach((r,i)=>{
     const cy=padT+rowH*i+rowH/2;
-    const bw=Math.max(2, (w-padL-padR)*r.sum/max);
+    const bw=Math.max(2,(w-padL-padR)*r.value/max);
     cx.fillStyle=track; cx.fillRect(padL, cy-barH/2, w-padL-padR, barH);
-    cx.fillStyle=prim;  cx.fillRect(padL, cy-barH/2, bw, barH);
-    // model names right-aligned + truncated
-    let nm=String(r.name||'');
-    const maxW=padL-8;
-    while(nm.length>3 && cx.measureText(nm).width>maxW) nm=nm.slice(0,-2);
-    cx.fillStyle=onSurf; cx.textAlign='right'; cx.fillText(nm, padL-6, cy); cx.textAlign='left';
-    cx.fillStyle=onSurf; cx.fillText(shortNum(r.sum), Math.min(w-padR+4, padL+bw+6), cy);
+    cx.fillStyle=cols[i]; cx.fillRect(padL, cy-barH/2, bw, barH);
+    chartFont(cx,10);
+    cx.fillStyle=onSurf; cx.textAlign='right';
+    cx.fillText(fitText(cx, r.name, padL-10), padL-6, cy);
+    cx.fillText(shortNum(r.value), w-6, cy);
+    cx.textAlign='left';
+  });
+}
+
+function drawPieChart(id, rows, {maxSlices=6}={}){
+  const H=210, g=cvCtx(id,H); if(!g) return;
+  const {cx,w,h}=g;
+  const onSurf=cssVar('--md-sys-color-on-surface-variant','#9a9a9a');
+  const onSurfMain=cssVar('--md-sys-color-on-surface','#E6E1E5');
+  const surf=cssVar('--md-sys-color-surface-container','#211F26');
+  const list=(rows||[]).filter(r=>(r.value||0)>0);
+  if(!list.length){ chartFont(cx,11); cx.fillStyle=onSurf; cx.fillText('暂无数据 (需有请求流过)',12,h/2); return; }
+  const items=list.slice(0,maxSlices).map(r=>({name:r.name,value:r.value}));
+  const rest=list.slice(maxSlices).reduce((t,r)=>t+r.value,0);
+  if(rest>0) items.push({name:'其他',value:rest});
+  const total=items.reduce((t,r)=>t+r.value,0);
+  const cols=chartPalette(items.length);
+  const R=Math.max(34,Math.min(h*0.36,w*0.24));
+  const px=R+12, py=h/2;
+  let a0=-Math.PI/2;
+  items.forEach((it,i)=>{
+    const da=it.value/total*Math.PI*2;
+    cx.beginPath(); cx.moveTo(px,py); cx.arc(px,py,R,a0,a0+da); cx.closePath();
+    cx.fillStyle=cols[i]; cx.fill();
+    cx.strokeStyle=surf; cx.lineWidth=1.5; cx.stroke();
+    a0+=da;
+  });
+  cx.beginPath(); cx.arc(px,py,R*0.56,0,Math.PI*2); cx.fillStyle=surf; cx.fill();
+  chartFont(cx,12,'600'); cx.fillStyle=onSurfMain; cx.textAlign='center';
+  cx.fillText(shortNum(total), px, py-2);
+  chartFont(cx,9); cx.fillStyle=onSurf; cx.fillText('合计', px, py+12);
+  cx.textAlign='left';
+  const lx=px+R+14, lw=Math.max(40,w-lx-6);
+  const rowH=Math.min(18,(h-8)/Math.max(1,items.length));
+  let ly=h/2-(items.length*rowH)/2+rowH/2;
+  items.forEach((it,i)=>{
+    cx.fillStyle=cols[i]; cx.fillRect(lx, ly-4, 8, 8);
+    const pct=total?(it.value/total*100).toFixed(1)+'%':'0%';
+    chartFont(cx,9);
+    const pw=cx.measureText(pct).width;
+    chartFont(cx,10); cx.fillStyle=onSurf;
+    cx.fillText(fitText(cx, it.name, Math.max(20,lw-14-pw-4)), lx+12, ly);
+    chartFont(cx,9); cx.fillStyle=onSurfMain;
+    cx.fillText(pct, w-6-pw, ly);
+    ly+=rowH;
   });
 }
 
 // ============ Events (centralized delegation) ============
 document.body.addEventListener('click', e=>{
+  const tab=e.target.closest('[data-chart]');
+  if(tab && tab.dataset.chart){ setChartMode(tab.dataset.chart, tab.dataset.mode); return; }
   const nav=e.target.closest('[data-page]');
   if(nav?.dataset.page){
     if(nav.closest('#dlgBody')) $('#dlgOverlay').hidden=true;
+    if(nav.closest('#railList')) setRail(false);
     go(nav.dataset.page); return;
   }
   const jump=e.target.closest('[data-goto]');
@@ -1562,12 +1727,6 @@ document.body.addEventListener('click', e=>{
   }
   const cmdBtn=e.target.closest('[data-cmd]');
   if(cmdBtn?.dataset.cmd) doInstanceAction(cmdBtn.dataset.name, cmdBtn.dataset.cmd);
-});
-$('#navbar').addEventListener('navigation-bar-activated', e=>{
-  const t=e.detail?.tab, page=t?.dataset?.page;
-  if(!page) return;
-  if(page==='__more'){ openViewSheet(); syncNav(); return; }
-  go(page);
 });
 $('#dlgOk').addEventListener('click', async ()=>{
   const btn=$('#dlgOk'); btn.disabled=true;
@@ -1602,8 +1761,14 @@ if(rpTestInc) rpTestInc.addEventListener('click',()=>{ const rules=rpCompileCli(
 // Tunnel
   $('#tn-toggle').addEventListener('click',async()=>{ try{ const d=await adapter.getTunnel(); await adapter.tunnelAction(d.running?'stop':'start'); snack(d.running?'隧道已停止':'隧道启动中…'); setTimeout(loadTunnel,1500); }catch(e){ snack(e.message,true); } });
   $('#tn-copy').addEventListener('click',()=>{ const t=$('#tn-url').textContent; if(t){ navigator.clipboard&&navigator.clipboard.writeText(t); snack('已复制'); } });
-$('#rt-save').addEventListener('click',saveRouting);
+['#rt-save','#rt-save2','#rt-save3','#rt-save4'].forEach(sel=>{ const b=$(sel); if(b) b.addEventListener('click',saveRouting); });
 $('#rt-reset').addEventListener('click',renderRouting);
+if($('#rt-extra-add')) $('#rt-extra-add').addEventListener('click',rtAddChip);
+if($('#rt-extra-find')) $('#rt-extra-find').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.isComposing){ e.preventDefault(); rtAddChip(); } });
+if($('#rt-extra-chips')) $('#rt-extra-chips').addEventListener('click',e=>{
+  const x=e.target.closest('.mm-x'); if(!x) return;
+  rtExtra.splice(+x.dataset.i,1); rtRenderChips();
+});
 $('#rt-syncNow').addEventListener('click', async ()=>{
   const btn=$('#rt-syncNow'); btn.disabled=true; const old='立即同步'; btn.textContent='同步中…';
   try{ const r=await adapter.syncModels(Store.inst);
@@ -1616,36 +1781,17 @@ $('#ky-save').addEventListener('click',saveKeys);
 $('#ss-revoke-all').addEventListener('click',()=>revokeSession(''));
 $('#ss-expire-set').addEventListener('click',setAdminExpire);
 $('#ss-expire-clear').addEventListener('click',clearAdminExpire);
-$('#rq-refresh').addEventListener('click',renderRequests);
-$('#rq-rec-save').addEventListener('click',saveRecCfg);
-$('#rq-rec-enable').addEventListener('change',saveRecCfg);
+$('#lg-req-refresh').addEventListener('click',renderLogs);
+$('#lg-rec-enable').addEventListener('change',saveRecCfg);
+// The text field's own change relies on the native event bubbling out of its shadow root; focusout + Enter make the save certain
+$('#lg-rec-server').addEventListener('change',saveRecCfg);
+$('#lg-rec-server').addEventListener('focusout',saveRecCfg);
+$('#lg-rec-server').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.isComposing) saveRecCfg(); });
 $('#lg-refresh').addEventListener('click',renderLogs);
+$('#ov-log-refresh').addEventListener('click',renderOverview);
 $('#refreshBtn').addEventListener('click',()=>{ go(Store.page); });
 $('#refreshBtn').addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ go(Store.page); } });
-$('#modeChip').addEventListener('click',()=>{
-  Store.adapter = Store.adapter==='mock'?'http':'mock';
-  adapter = Store.adapter==='mock' ? new MockAdapter() : new HttpAdapter();
-  $('#modeChip').label = Store.adapter==='mock'?'Mock':'HTTP';
-  $('#modeChipIc').textContent = Store.adapter==='mock'?'inventory_2':'public';
-  localStorage.setItem('agw-mode',Store.adapter);
-  go(Store.page);
-});
 $('#topInst').addEventListener('change', e=>{ Store.inst=e.target.value; go(Store.page); });
-$('#ch-send').addEventListener('click',sendChat);
-$('#ch-input').addEventListener('keydown', e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); sendChat(); } });
-$('#ch-clear').addEventListener('click',()=>{
-  const n=Store.chat.messages.length;
-  if(!n){ snack('没有可清空的消息'); return; }
-  if(!confirm(`确定清空全部 ${n} 条消息? 此操作不可撤销。`)) return;
-  Store.chat.messages=[]; Store.chat.streaming=false; renderChatMessages(true); snack('已清空');
-});
-$('#ch-jump').addEventListener('click',()=>{ const b=$('#ch-messages'); if(b){ chatStick=true; b.scrollTop=b.scrollHeight; chatUpdateJump(); } });
-$('#ch-messages')?.addEventListener('scroll',()=>{ chatStick=chatAtBottom(); chatUpdateJump(); });
-$('#ch-messages')?.addEventListener('click', e=>{
-  const b=e.target.closest('.chat-copy'); if(!b) return;
-  const m=Store.chat.messages[+b.dataset.copy]; if(m) copyText(m.content);
-});
-$('#ch-model').addEventListener('change', e=>{ Store.chat.model=e.target.value; });
 window.addEventListener('online',()=>{ Store.online=true; });
 window.addEventListener('offline',()=>{ Store.online=false; snack('网络已断开',true); });
 
@@ -1655,6 +1801,9 @@ if(!MW_OK){
   $('#compatBar').classList.add('show');
 }
 $('#keyBtn').addEventListener('click',openKeyDialog);
+$('#railToggle').addEventListener('click',toggleRail);
+$('#railScrim').addEventListener('click',()=>setRail(false));
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&railOpen()) setRail(false); });
 $('#thBtn').addEventListener('click',openThemeDialog);
 // ?key=<webToken> one-click token access: store in localStorage and scrub from the address bar
 try{
@@ -1677,7 +1826,7 @@ function applyBrand(b){
 }
 function loadBrand(){ try{ applyBrand(JSON.parse(localStorage.getItem('agw-brand')||'null')); }catch(_){ applyBrand(null); } }
 function openBrandDialog(){
-  openDialog('修改页面名称', `<div style="display:flex;flex-direction:column;gap:14px;padding-top:8px">
+  openDialog('修改页面名称', `<div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
     <md-outlined-text-field data-f="bname" label="名称" value="${escAttr(brandState.name)}"></md-outlined-text-field>
     <md-outlined-text-field data-f="bver" label="副标题(留空隐藏)" value="${escAttr(brandState.ver)}"></md-outlined-text-field>
   </div>`, {onOk:()=>{
@@ -1692,10 +1841,10 @@ function openBrandDialog(){
 loadBrand();
 $('#railBrand').addEventListener('click', openBrandDialog);
 loadTheme();
+try{ const cm=JSON.parse(localStorage.getItem('agw-chart')||'null'); if(cm) Store.chartMode=Object.assign(Store.chartMode,cm); }catch(_){}
+try{ setRail(localStorage.getItem('agw-rail')==='open', false); }catch(_){ setRail(false, false); }
 buildNav();
-if(localStorage.getItem('agw-mode')==='mock'){
-  Store.adapter='mock'; adapter=new MockAdapter(); $('#modeChip').label='Mock'; $('#modeChipIc').textContent='inventory_2';
-}
+syncChartTabs();
 // Never let a slow/hung first /admin/api/instances call block the whole boot:
 // render the default page after at most 6s; the per-page render has its own 20s abort guard.
 await Promise.race([
@@ -1707,8 +1856,7 @@ let chartResizeT=0;
 window.addEventListener('resize',()=>{
   clearTimeout(chartResizeT);
   chartResizeT=setTimeout(()=>{
-    const c=Store.charts;
-    if(c && Store.page==='stats'){ drawDailyChart(c.daily); drawModelChart(c.models); }
+    if(Store.page==='stats') drawAllCharts();
   },150);
 });
 console.log('[AI Gateway] Material Web 面板已初始化 · 组件库', MW_OK?'就绪':'缺失');

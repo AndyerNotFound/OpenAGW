@@ -12,6 +12,7 @@ const { openaiToCanonical, claudeToCanonical, geminiToCanonical, openaiRespToCan
 const { joinUrl, upstreamRequest } = require('./upstream');
 const { redactText, respRedactOn } = require('./redact');
 const { logErr, log } = require('./util');
+const { overrideFor, applyOverride } = require('./override');
 let crypt = null; try { crypt = require('./crypt.js'); } catch (_) {}
 const admin = require('./admin');
 
@@ -126,6 +127,9 @@ function buildRequestForChannel(cfg, ch, clientFormat, clientApi, canonical, bod
   const sameWire = clientFormat === ch.type && clientApi === upApi;
   const direct = sameWire && !respRedactOn(cfg, urlInfo);
   const stream = canonical.stream;
+  // Parameter override (instance default + channel-level): merged over whichever body finally goes
+  // upstream -- verbatim or converted -- so it beats what the SDK client sent.
+  const ov = overrideFor(cfg, ch);
 const upstreamModel = canonical.model; // already rewritten by the caller to this channel's upstream model name
   let url, headers = {}, bodyBuf;
   const lockedPath = ch.path || null;
@@ -155,17 +159,19 @@ const upstreamModel = canonical.model; // already rewritten by the caller to thi
         : joinUrl(ch.baseUrl, '/v1beta/models/' + encodeURIComponent(upstreamModel) + ':' + action) + (stream && urlInfo.altSse ? '?alt=sse' : '');
       headers['x-goog-api-key'] = ch.apiKey;
     }
-    bodyBuf = Buffer.from(JSON.stringify(body));
+    bodyBuf = Buffer.from(JSON.stringify(ov ? applyOverride(body, ov, ch) : body));
   } else {
     const uc = { ...canonical, model: upstreamModel };
     if (ch.type === 'openai') {
       url = joinUrl(ch.baseUrl, lockedPath || (upApi === 'responses' ? '/v1/responses' : '/v1/chat/completions'));
 if (ch.maxTokens && uc.max_tokens == null && uc.max_completion_tokens == null) uc.max_tokens = Number(ch.maxTokens);   // *same as above: injected on the conversion path too
-      bodyBuf = Buffer.from(JSON.stringify(upApi === 'responses' ? canonicalToResponsesBody(uc) : BUILD_BODY.openai(uc, { addUsage: ch.addUsage })));
+      const outBody = upApi === 'responses' ? canonicalToResponsesBody(uc) : BUILD_BODY.openai(uc, { addUsage: ch.addUsage });
+      bodyBuf = Buffer.from(JSON.stringify(ov ? applyOverride(outBody, ov, ch) : outBody));
       headers.authorization = 'Bearer ' + ch.apiKey;
     } else if (ch.type === 'claude') {
       url = joinUrl(ch.baseUrl, lockedPath || '/v1/messages');
-      bodyBuf = Buffer.from(JSON.stringify(BUILD_BODY.claude(uc)));
+      const outBody = BUILD_BODY.claude(uc);
+      bodyBuf = Buffer.from(JSON.stringify(ov ? applyOverride(outBody, ov, ch) : outBody));
       headers['x-api-key'] = ch.apiKey;
       headers['anthropic-version'] = ch.anthropicVersion || '2023-06-01';
     } else {
@@ -173,7 +179,8 @@ if (ch.maxTokens && uc.max_tokens == null && uc.max_completion_tokens == null) u
       url = lockedPath
         ? joinUrl(ch.baseUrl, lockedPath)
         : joinUrl(ch.baseUrl, '/v1beta/models/' + encodeURIComponent(upstreamModel) + ':' + action) + (stream ? '?alt=sse' : '');
-      bodyBuf = Buffer.from(JSON.stringify(BUILD_BODY.gemini(uc)));
+      const outBody = BUILD_BODY.gemini(uc);
+      bodyBuf = Buffer.from(JSON.stringify(ov ? applyOverride(outBody, ov, ch) : outBody));
       headers['x-goog-api-key'] = ch.apiKey;
     }
   }

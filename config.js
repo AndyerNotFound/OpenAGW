@@ -10,6 +10,7 @@ const os = require('os');
 const zlib = require('zlib');
 const { logErr } = require('./util');
 const { redactCache } = require('./redact');
+const { normalizeOverride } = require('./override');
 let crypt = null; try { crypt = require('./crypt.js'); } catch (_) {}
 
 // ================= Config loading =================
@@ -124,6 +125,8 @@ cfg.tls.port = null; // legacy field, ignored: one entry per instance -- HTTPS o
   if (!(cfg.breaker.cooldownSec > 0)) cfg.breaker.cooldownSec = 120;
 // Routing: when true, random instead of round-robin (default false, backward compatible)
   cfg.routeRandom = !!cfg.routeRandom;
+// Parameter override (instance level): merged over the final upstream body, channel-level one wins (see override.js)
+  cfg.paramOverride = normalizeOverride(cfg.paramOverride, '实例 paramOverride');
   return cfg;
 }
 
@@ -181,6 +184,8 @@ lockUntil: Number(ch.lockUntil) > 0 ? Number(ch.lockUntil) : null, // when it au
 // Balance warning threshold (channel-level, display only, not interpreted by the gateway): "5" or "CNY=5,USD=1"
       warnBelow: ch.warnBelow == null || ch.warnBelow === '' ? null
         : (typeof ch.warnBelow === 'string' ? String(ch.warnBelow) : JSON.stringify(ch.warnBelow)),
+      // Parameter override (channel level): wins over the instance one, applied to the final upstream body
+      paramOverride: normalizeOverride(ch.paramOverride, '渠道 "' + String(ch.name || ('channel-' + i)) + '" paramOverride'),
     });
     const last = cfg.channels[cfg.channels.length - 1];
     if (!/^[\x09\x20-\x7e]*$/.test(last.apiKey)) logErr(`⚠ [config] 渠道 "${last.name}" 的 apiKey 含中文/非ASCII字符(像占位符?), 请求会失败, 请填入真实 Key`);
