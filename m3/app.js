@@ -2021,10 +2021,13 @@ try{
   }
 }catch(_){}
 upgradePwFields(document.body);
-// ---- Dynamic background: aurora / uploaded image (stored in localStorage, per device) ----
-// The image is downscaled to <=1440px JPEG before storing: photos are far larger than localStorage
-// and would throw QuotaExceededError otherwise. It never leaves the device.
-function bgLoad(){ try{ return JSON.parse(localStorage.getItem('agw-bg')||'null')||{}; }catch(_){ return {}; } }
+// ---- Dynamic background: default gradient / aurora / uploaded image (stored in localStorage, per device) ----
+// The image never leaves the device: it is downscaled and re-encoded as JPEG before it reaches
+// localStorage, stepping resolution/quality down so a phone photo cannot blow the quota.
+const BG_KEY='agw-bg';
+let bgDraft=null;      // image picked in the open dialog; written to localStorage only on 应用
+let bgCleared=false;   // 移除图片 pressed in the open dialog
+function bgLoad(){ try{ return JSON.parse(localStorage.getItem(BG_KEY)||'null')||{}; }catch(_){ return {}; } }
 function applyBg(){
   const layer=$('#bgLayer'); if(!layer) return;
   const st=bgLoad(), mode=st.mode||'none';
@@ -2032,59 +2035,102 @@ function applyBg(){
   else if(mode==='img'&&st.img){ layer.className='img'; layer.style.backgroundImage=`url(${st.img})`; }
   else { layer.className=''; layer.style.backgroundImage=''; }
 }
-function bgStoreImage(dataUrl){
-  const img=new Image();
-  img.onload=()=>{
-    try{
-      const max=1440, sc=Math.min(1,max/Math.max(img.width,img.height));
-      const c=document.createElement('canvas');
-      c.width=Math.max(1,Math.round(img.width*sc)); c.height=Math.max(1,Math.round(img.height*sc));
-      c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-      const out=c.toDataURL('image/jpeg',.82);
-      const st=bgLoad(); st.mode='img'; st.img=out;
-      localStorage.setItem('agw-bg',JSON.stringify(st));
-      applyBg();
-      const hint=$('#bgFileHint'); if(hint) hint.textContent=`已上传并预览 (${Math.round(out.length/1024)}KB)`;
-    }catch(e){ snack('图片处理失败: '+e.message,true); }
-  };
-  img.onerror=()=>snack('图片无法读取',true);
-  img.src=dataUrl;
+function bgReadFile(file){
+  return new Promise((res,rej)=>{
+    const r=new FileReader();
+    r.onload=()=>res(String(r.result||''));
+    r.onerror=()=>rej(new Error('图片读取失败'));
+    r.readAsDataURL(file);
+  });
+}
+function bgDecode(src){
+  return new Promise((res,rej)=>{
+    const img=new Image();
+    img.onload=()=>res(img);
+    img.onerror=()=>rej(new Error('图片无法读取'));
+    img.src=src;
+  });
+}
+function bgEncode(img,max,q){
+  const sc=Math.min(1,max/Math.max(img.width||1,img.height||1));
+  const c=document.createElement('canvas');
+  c.width=Math.max(1,Math.round(img.width*sc)); c.height=Math.max(1,Math.round(img.height*sc));
+  const g=c.getContext('2d');
+  g.fillStyle='#141218'; g.fillRect(0,0,c.width,c.height); // JPEG has no alpha; a transparent PNG would land on black anyway
+  g.drawImage(img,0,0,c.width,c.height);
+  return c.toDataURL('image/jpeg',q);
+}
+async function bgPrepareImage(file){
+  const img=await bgDecode(await bgReadFile(file));
+  let out='';
+  for(const [max,q] of [[1600,.82],[1280,.76],[1024,.7],[840,.64],[680,.58],[520,.5]]){
+    out=bgEncode(img,max,q);
+    if(out.length<=900*1024) break;
+  }
+  return out;
+}
+function bgSyncPreview(){
+  const box=$('#bgPreview'), hint=$('#bgFileHint'), clr=$('#bgClear');
+  const st=bgLoad();
+  const img=bgCleared?null:(bgDraft||st.img||null);
+  if(box) box.style.backgroundImage=img?`url(${img})`:'';
+  if(hint) hint.textContent=bgDraft?`新图片已就绪 (${Math.round(bgDraft.length/1024)}KB), 点「应用」生效`:(img?'当前图片已设置':'未上传图片');
+  if(clr) clr.style.display=img?'':'none';
 }
 function openBgDialog(){
-  const st=bgLoad(), mode=st.mode||'none';
+  const st=bgLoad();
+  let mode=st.mode||'none';
+  if(mode==='img'&&!st.img) mode='none';
+  bgDraft=null; bgCleared=false;
   openDialog('动态背景', `<div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
-    <md-outlined-select data-f="bgmode" label="背景模式">
-      <md-option value="none">默认渐变</md-option>
-      <md-option value="aurora">七色流光</md-option>
-      <md-option value="img">自定义图片</md-option>
+    <md-outlined-select data-f="bgmode" label="背景模式" style="width:100%">
+      ${[['none','默认渐变'],['aurora','七色流光'],['img','自定义图片']].map(([v,t])=>`<md-select-option value="${v}" ${v===mode?'selected':''}>${t}</md-select-option>`).join('')}
     </md-outlined-select>
-    <div style="display:flex;gap:6px;align-items:center;min-width:0">
-      <input type="file" id="bgFile" accept="image/*" style="font-size:10px;min-width:0;max-width:100%">
+    <div style="display:flex;gap:8px;align-items:center;min-width:0">
+      <div id="bgPreview" title="点击选择图片" style="width:72px;height:48px;flex:none;border-radius:8px;border:1px solid var(--md-sys-color-outline-variant);background:var(--md-sys-color-surface-container-high) center/cover no-repeat"></div>
+      <div style="display:flex;flex-direction:column;gap:4px;min-width:0;flex:1">
+        <input type="file" id="bgFile" accept="image/*" style="font-size:10px;min-width:0;max-width:100%">
+        <div id="bgFileHint" style="font-size:9px;color:var(--md-sys-color-on-surface-variant)"></div>
+      </div>
     </div>
-    <div id="bgFileHint" style="font-size:9px;color:var(--md-sys-color-on-surface-variant)">${st.img?'已设置图片':'未上传图片'}</div>
-    <div style="font-size:9px;color:var(--md-sys-color-on-surface-variant)">图片仅保存在本设备浏览器中, 不会上传到网关</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <md-text-button id="bgClear">移除图片</md-text-button>
+      <span style="font-size:9px;color:var(--md-sys-color-on-surface-variant)">图片仅保存在本设备浏览器中, 不会上传到网关</span>
+    </div>
   </div>`, {okText:'应用', onOk:()=>{
-    const v=dlgValue();
-    const m=String(v.bgmode||'none');
-    const cur=bgLoad();  // re-read: an image may have been uploaded while the dialog is open
-    if(m==='img'&&!cur.img){ snack('请先选择一张图片',true); return false; }
-    try{
-      cur.mode=m;
-      if(m!=='img') delete cur.img;
-      localStorage.setItem('agw-bg',JSON.stringify(cur));
-    }catch(e){ snack('保存失败: '+e.message,true); return false; }
+    const m=String(dlgValue().bgmode||'none');
+    const cur=bgLoad();
+    const img=bgCleared?null:(bgDraft||cur.img||null);
+    if(m==='img'&&!img){ snack('请先选择一张图片',true); return false; }
+    const next=Object.assign({},cur,{mode:m});
+    if(img) next.img=img; else delete next.img;
+    try{ localStorage.setItem(BG_KEY,JSON.stringify(next)); }
+    catch(e){ snack('保存失败: 浏览器存储空间不足, 请换一张更小的图片',true); return false; }
     applyBg(); snack('背景已更新'); return true;
   }});
-  setTimeout(()=>{ const sel=$('#dlgBody md-outlined-select'); if(sel) sel.value=mode; },80);
+  bgSyncPreview();
+  const sel=$('#dlgBody md-outlined-select');
+  if(sel) sel.updateComplete
+    .then(()=>Promise.all([...sel.querySelectorAll('md-select-option')].map(o=>o.updateComplete||0)))
+    .then(()=>{ sel.value=mode; patchSelect(sel); })
+    .catch(()=>{});
+  $('#bgPreview')?.addEventListener('click',()=>$('#bgFile')?.click());
+  $('#bgClear')?.addEventListener('click',()=>{
+    bgDraft=null; bgCleared=true; bgSyncPreview();
+    const s=$('#dlgBody md-outlined-select'); if(s){ s.value='none'; patchSelect(s); }
+  });
 }
-document.body.addEventListener('change', e=>{
-  if(e.target&&e.target.id==='bgFile'){
-    const f=e.target.files&&e.target.files[0]; if(!f) return;
-    const r=new FileReader();
-    r.onload=()=>bgStoreImage(String(r.result||''));
-    r.onerror=()=>snack('图片读取失败',true);
-    r.readAsDataURL(f);
-  }
+document.body.addEventListener('change', async e=>{
+  if(!e.target||e.target.id!=='bgFile') return;
+  const f=e.target.files&&e.target.files[0]; if(!f) return;
+  const hint=$('#bgFileHint'); if(hint) hint.textContent='正在处理图片…';
+  try{
+    bgDraft=await bgPrepareImage(f);
+    bgCleared=false;
+    const sel=$('#dlgBody md-outlined-select');
+    if(sel&&sel.value!=='img'){ sel.value='img'; patchSelect(sel); }
+    bgSyncPreview();
+  }catch(err){ snack(err.message||'图片处理失败',true); bgSyncPreview(); }
 });
 
 // ---- Custom brand name (edit via the brand area top-left; stored in localStorage, per device) ----
