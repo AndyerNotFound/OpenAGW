@@ -1913,9 +1913,9 @@ try{
 }catch(_){}
 upgradePwFields(document.body);
 // ---- Custom brand name (edit via the brand area top-left; stored in localStorage, per device) ----
-let brandState={name:'AI Gateway',ver:'Material Web v2.11'};
+let brandState={name:'OpenAGW',ver:'Material Web v2.11'};
 function applyBrand(b){
-  brandState={name:(b&&b.name)||'AI Gateway', ver:b&&b.ver!=null?b.ver:'Material Web v2.11'};
+  brandState={name:(b&&b.name)||'OpenAGW', ver:b&&b.ver!=null?b.ver:'Material Web v2.11'};
   const n=$('.rail-brand .name'), v=$('.rail-brand .ver');
   if(n) n.textContent=brandState.name;
   if(v){ v.textContent=brandState.ver; v.style.display=brandState.ver?'':'none'; }
@@ -1928,7 +1928,7 @@ function openBrandDialog(){
     <md-outlined-text-field data-f="bver" label="副标题(留空隐藏)" value="${escAttr(brandState.ver)}"></md-outlined-text-field>
   </div>`, {onOk:()=>{
     const v=dlgValue();
-    const name=String(v.bname||'').trim()||'AI Gateway', ver=String(v.bver||'').trim();
+    const name=String(v.bname||'').trim()||'OpenAGW', ver=String(v.bver||'').trim();
     applyBrand({name,ver});
     try{ localStorage.setItem('agw-brand',JSON.stringify({name,ver})); }catch(_){}
     snack('页面名称已更新');
@@ -1957,4 +1957,4 @@ window.addEventListener('resize',()=>{
     if(Store.page==='stats') drawAllCharts();
   },150);
 });
-console.log('[AI Gateway] Material Web 面板已初始化 · 组件库', MW_OK?'就绪':'缺失');
+console.log('[OpenAGW] Material Web 面板已初始化 · 组件库', MW_OK?'就绪':'缺失');
