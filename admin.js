@@ -826,6 +826,18 @@ const BALL = (() => {
   return { validate, keys: ALL, hashOf, orderClash };
 })();
 
+// ---- announcements: panel notices, stored in <DIR>/announcements.json (newest first) ----
+// Gateway-level content (not per-channel config): every panel page/instance of this data dir shares one file.
+function loadAnnouncements() {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(DATA(), 'announcements.json'), 'utf8'));
+    return Array.isArray(j.items) ? j.items : [];
+  } catch (_) { return []; }
+}
+function saveAnnouncements(items) {
+  fs.writeFileSync(path.join(DATA(), 'announcements.json'), JSON.stringify({ items }, null, 2));
+}
+
 async function handleAdmin(cfg, req, res, u, p, bodyStr) {
 // /admin was the original built-in panel; it is retired -- the M3 panel under /auth is the only UI now.
 // The path stays as an alias so old bookmarks keep working; ?key= (webToken) survives the hop.
@@ -1040,6 +1052,43 @@ async function handleAdmin(cfg, req, res, u, p, bodyStr) {
       pending: [],
       adminExpireAt: Number(cfg.adminExpireAt) || 0,
     });
+  }
+
+// GET  /admin/api/announcements        -- list (newest first)
+// POST /admin/api/announcements        -- create, or update when {id} is present
+// POST /admin/api/announcements-delete -- remove one {id}
+  if (api === 'announcements' || api === 'announcements-delete') {
+    if (api === 'announcements' && req.method === 'GET') {
+      const items = loadAnnouncements().sort((a, b) => (b.at || 0) - (a.at || 0));
+      return jsonRes(res, 200, { ok: true, items });
+    }
+    if (req.method !== 'POST') return jsonRes(res, 405, { error: '只支持 POST', Allow: 'POST' });
+    let j = {}; try { j = JSON.parse(bodyStr || '{}'); } catch (_) {}
+    try {
+      if (api === 'announcements-delete') {
+        const id = String(j.id || '');
+        const before = loadAnnouncements();
+        const items = before.filter(a => a.id !== id);
+        if (items.length === before.length) return jsonRes(res, 404, { error: '公告不存在' });
+        saveAnnouncements(items);
+        return jsonRes(res, 200, { ok: true });
+      }
+      const title = String(j.title || '').trim();
+      if (!title) return jsonRes(res, 400, { error: '标题不能为空' });
+      const body = String(j.body || '').slice(0, 4000);
+      const items = loadAnnouncements();
+      if (j.id) {
+        const it = items.find(a => a.id === String(j.id));
+        if (!it) return jsonRes(res, 404, { error: '公告不存在' });
+        it.title = title; it.body = body; it.at = Date.now();
+      } else {
+        items.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), title, body, at: Date.now() });
+      }
+      saveAnnouncements(items);
+      return jsonRes(res, 200, { ok: true });
+    } catch (e) {
+      return jsonRes(res, 500, { error: '保存失败: ' + e.message });
+    }
   }
 
 // GET /admin/api/mdu -- Material You wallpaper primary color (color-bridge)

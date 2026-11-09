@@ -58,6 +58,12 @@
       </md-filled-card>
 
       <md-filled-card>
+        <div class="card-head"><div><div class="card-title">公告</div><div class="card-sub">最新通知</div></div>
+          <md-text-button data-goto="announce">全部公告</md-text-button></div>
+        <div id="ov-ann-list" class="list-gap"><div class="empty">加载中…</div></div>
+      </md-filled-card>
+
+      <md-filled-card>
         <div class="card-head"><div><div class="card-title">运行概览</div><div class="card-sub">实例与运行状态</div></div>
           <md-text-button data-goto="ports">管理端口</md-text-button></div>
         <div class="stat-row" role="region" aria-label="运行概览">
@@ -89,13 +95,15 @@
         <div id="ov-model-list" class="ov-car" role="region" aria-label="模型广场"><div class="empty">正在加载…</div></div>
       </md-filled-card>
 
+    </section>
+
+    <section id="page-announce" class="page hidden" hidden>
       <md-filled-card>
-        <div class="card-head"><div><div class="card-title">近期日志</div><div class="card-sub">实例 <span id="ov-log-inst" class="mono">-</span> 的最新输出</div></div>
-          <div class="flex-row">
-            <md-text-button id="ov-log-refresh">刷新</md-text-button>
-            <md-text-button data-goto="logs">全部日志</md-text-button>
-          </div></div>
-        <div class="log-box" id="ov-log" role="log" aria-live="polite" aria-label="近期日志">选择实例后加载日志…</div>
+        <div class="card-head">
+          <div><div class="card-title">公告</div><div class="card-sub">面向面板访问者的通知 · 新的在前</div></div>
+          <md-filled-button id="an-add"><md-icon slot="icon">add</md-icon>发布公告</md-filled-button>
+        </div>
+        <div id="an-list" class="list-gap"><md-linear-progress indeterminate></md-linear-progress></div>
       </md-filled-card>
     </section>
 

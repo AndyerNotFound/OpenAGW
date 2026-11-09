@@ -128,6 +128,9 @@ await new Promise(r=>setTimeout(r,3500)); // let the old process exit and the ne
   async fetchModels(inst,body,signal){ return this._fetch(`${this.base}/admin/api/channel-models/${encodeURIComponent(inst)}`,{method:'POST',headers:this._hdr(),body:JSON.stringify(body)},signal); }
   async syncModels(inst,signal){ return this._fetch(`${this.base}/admin/api/sync-models`,{method:'POST',headers:this._hdr()},signal); }
   async getWebSessions(signal){ return this._fetch(`${this.base}/admin/api/web-sessions`,{headers:this._hdr()},signal); }
+  async getAnnouncements(signal){ return this._fetch(`${this.base}/admin/api/announcements`,{headers:this._hdr()},signal); }
+  async saveAnnouncement(a,signal){ return this._fetch(`${this.base}/admin/api/announcements`,{method:'POST',headers:this._hdr(),body:JSON.stringify(a)},signal); }
+  async deleteAnnouncement(id,signal){ return this._fetch(`${this.base}/admin/api/announcements-delete`,{method:'POST',headers:this._hdr(),body:JSON.stringify({id})},signal); }
   async revokeWebSession(sid,signal){ return this._fetch(`${this.base}/admin/api/web-expired`,{method:'POST',headers:this._hdr(),body:JSON.stringify(sid?{sid}:{})},signal); }
   async setAdminExpire(at,signal){ return this._fetch(`${this.base}/admin/api/admin-expire`,{method:'POST',headers:this._hdr(),body:JSON.stringify({at:Number(at)||0})},signal); }
   async getMdu(signal){ return this._fetch(`${this.base}/admin/api/mdu`,{headers:this._hdr()},signal); }
@@ -152,6 +155,7 @@ await new Promise(r=>setTimeout(r,3500)); // let the old process exit and the ne
 const VIEWS = [
 // icons use Material Symbols word forms (local font ligatures; see @font-face)
   {id:'overview', label:'首页',   icon:'home'},
+  {id:'announce', label:'公告',   icon:'campaign'},
   {id:'providers',label:'提供商', icon:'business'},
   {id:'routing',  label:'路由',   icon:'sync'},
   {id:'stats',    label:'统计',   icon:'bar_chart'},
@@ -162,7 +166,7 @@ const VIEWS = [
   {id:'session',  label:'会话',   icon:'devices'},
   {id:'replace',  label:'替换',   icon:'find_replace'},
 ];
-const TITLES = {overview:'首页',providers:'提供商',routing:'路由策略',keys:'API 密钥',cards:'卡密管理',ports:'服务端口',session:'面板会话',replace:'文本替换',stats:'统计',logs:'日志'};
+const TITLES = {overview:'首页',announce:'公告',providers:'提供商',routing:'路由策略',keys:'API 密钥',cards:'卡密管理',ports:'服务端口',session:'面板会话',replace:'文本替换',stats:'统计',logs:'日志'};
 const Store = {
   page:'overview', instances:[], configs:new Map(), aborts:new Map(), timer:null,
   online:navigator.onLine, currentName:'',
@@ -285,7 +289,7 @@ async function go(page){
   }
   if(page==='overview') Store.startRefresh(()=>{ if(Store.page==='overview' && !Store._ovBusy) renderOverview(); },5000);
   else if(page==='stats') Store.startRefresh(()=>{ if(Store.page==='stats' && !Store._stBusy) renderStats(); },5000);
-  const R={overview:renderOverview,providers:renderProviders,routing:renderRouting,
+  const R={overview:renderOverview,announce:renderAnnounce,providers:renderProviders,routing:renderRouting,
     keys:renderKeys,cards:renderCards,ports:renderPorts,session:renderSession,replace:renderReplace,
     stats:renderStats,logs:renderLogs};
   await R[page]?.();
@@ -516,23 +520,56 @@ async function renderOverview(){
         ml.scrollLeft=Math.min(mLeft, ml.scrollWidth-ml.clientWidth);
       }
     }catch(e){ if(e.name!=='AbortError' && !$('#ov-model-list .model-page')) $('#ov-model-list').innerHTML='<div class="empty">模型列表读取失败: '+esc(e.message)+'</div>'; }
-// Recent log lines of the instance picked in the top bar (falls back to the panel host)
-    const logInst=(Store.inst && instances.some(i=>i.name===Store.inst)) ? Store.inst : (current || instances[0]?.name || '');
-    const lb=$('#ov-log');
-    if(logInst && lb){
-      $('#ov-log-inst').textContent=logInst;
-      try{
-        const txt=await adapter.getLogs(logInst,12,signal);
-        const tail=(lb.scrollHeight-lb.scrollTop-lb.clientHeight)<24;
-        lb.textContent=txt||'(空)';
-        if(tail) lb.scrollTop=lb.scrollHeight;
-      }catch(e){
-        if(e.name==='AbortError') throw e;
-        lb.textContent='读取失败: '+e.message;
-      }
-    }
+// Announcement preview: latest 3, non-fatal on failure
+    try{
+      const d=await adapter.getAnnouncements(signal);
+      const al=$('#ov-ann-list');
+      if(al) al.innerHTML=(d.items||[]).slice(0,3).map(anMini).join('')||'<div class="empty">暂无公告</div>';
+    }catch(_){}
   }catch(e){ if(e.name!=='AbortError'){ console.error(e); snack(e.message,true); } }
   finally{ ovDisarm(); Store._ovBusy=false; }
+}
+
+// ============ Render: announcements ============
+let anItems=[];
+function anCard(a){
+  return cardItem({
+    name:a.title,
+    state:fmtDateTime(a.at),
+    lines:String(a.body||'').split('\n').filter(Boolean),
+    acts:`<button class="pbtn pbtn-text" data-action="anEdit" data-name="${a.id}">编辑</button>`+
+         `<button class="pbtn pbtn-text" data-action="anDel" data-name="${a.id}">删除</button>`,
+  });
+}
+function anMini(a){  // compact card for the home column: title + time + first body line
+  const first=String(a.body||'').split('\n').filter(Boolean)[0]||'';
+  return cardItem({name:a.title, state:fmtDateTime(a.at), lines:first?[first]:[]});
+}
+async function renderAnnounce(){
+  const list=$('#an-list'); if(!list) return;
+  try{
+    const d=await adapter.getAnnouncements(Store.abort('announce'));
+    anItems=d.items||[];
+    list.innerHTML=anItems.length?anItems.map(anCard).join(''):'<div class="empty">暂无公告 — 点右上角「发布公告」添加</div>';
+  }catch(e){
+    if(e.name!=='AbortError') list.innerHTML='<div class="empty">读取失败: '+esc(e.message)+'</div>';
+  }
+}
+function openAnnounceDialog(a){
+  openDialog(a?'编辑公告':'发布公告', `<div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
+    <md-outlined-text-field data-f="atitle" label="标题" value="${escAttr(a?a.title:'')}"></md-outlined-text-field>
+    <md-outlined-text-field data-f="abody" label="内容(可换行)" type="textarea" rows="5" value="${escAttr(a?a.body||'':'')}"></md-outlined-text-field>
+  </div>`, {okText:a?'保存':'发布', onOk:async ()=>{
+    const v=dlgValue();
+    const title=String(v.atitle||'').trim();
+    if(!title){ snack('标题不能为空',true); return false; }
+    try{
+      await adapter.saveAnnouncement({id:a?a.id:undefined,title,body:String(v.abody||'')});
+      snack(a?'公告已保存':'公告已发布');
+      renderAnnounce();
+      return true;
+    }catch(e){ snack(e.message,true); return false; }
+  }});
 }
 
 // ============ Render: providers ============
@@ -1850,6 +1887,8 @@ document.body.addEventListener('click', e=>{
     else if(a==='delProxy') delProxy(n);
     else if(a==='viewBody') viewRecordBody(act.dataset.id);
     else if(a==='cwDel') cwDel(+act.dataset.i);
+    else if(a==='anEdit'){ openAnnounceDialog(anItems.find(x=>x.id===n)); }
+    else if(a==='anDel'){ if(confirm('删除该公告?')) adapter.deleteAnnouncement(n).then(renderAnnounce).catch(x=>snack(x.message,true)); }
     else if(a==='revokeSession') revokeSession(act.dataset.sid||'');
     return;
   }
@@ -1866,6 +1905,7 @@ $('#dlgOk').addEventListener('click', async ()=>{
 $('#dlgCancel').addEventListener('click', ()=>closeDlg());
 $('#dlgX').addEventListener('click', ()=>closeDlg());
 $('#dlgOverlay').addEventListener('click', e=>{ if(e.target===e.currentTarget) closeDlg(); });
+$('#an-add').addEventListener('click',()=>openAnnounceDialog());
 $('#pv-add').addEventListener('click',()=>openProviderDialog());
 $('#px-add').addEventListener('click',()=>openProxyDialog());
 ['out','inc'].forEach(dir=>{
@@ -1916,7 +1956,6 @@ $('#lg-rec-server').addEventListener('change',saveRecCfg);
 $('#lg-rec-server').addEventListener('focusout',saveRecCfg);
 $('#lg-rec-server').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.isComposing) saveRecCfg(); });
 $('#lg-refresh').addEventListener('click',renderLogs);
-$('#ov-log-refresh').addEventListener('click',renderOverview);
 OV_CAR_LISTS.forEach(sel=>$(sel)?.addEventListener('pointerenter',()=>{ Store._ovHover=true; }));
 OV_CAR_LISTS.forEach(sel=>$(sel)?.addEventListener('pointerleave',()=>{ Store._ovHover=false; }));
 $('#refreshBtn').addEventListener('click',()=>{ go(Store.page); });
