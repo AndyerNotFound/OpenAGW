@@ -2066,9 +2066,10 @@ function openBgDialog(){
   </div>`, {okText:'应用', onOk:()=>{
     const v=dlgValue();
     const m=String(v.bgmode||'none');
-    if(m==='img'&&!st.img){ snack('请先选择一张图片',true); return false; }
+    const cur=bgLoad();  // re-read: an image may have been uploaded while the dialog is open
+    if(m==='img'&&!cur.img){ snack('请先选择一张图片',true); return false; }
     try{
-      const cur=bgLoad(); cur.mode=m;
+      cur.mode=m;
       if(m!=='img') delete cur.img;
       localStorage.setItem('agw-bg',JSON.stringify(cur));
     }catch(e){ snack('保存失败: '+e.message,true); return false; }
