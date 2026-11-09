@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 /**
- * ai-gateway config tool -- interactive + argument-driven
+ * OpenAGW config tool -- interactive + argument-driven
  * Usage:
  *   agw.sh config                           interactive: pick an instance -> main menu
  *   agw.sh config [instance]                jump straight into an instance's main menu
@@ -19,7 +19,7 @@ const os = require('os');
 const readline = require('readline');
 const { utf8 } = require('./util');
 
-const DIR = path.join(os.homedir(), 'ai-gateway', 'data');
+const DIR = path.join(os.homedir(), 'OpenAGW', 'data');
 const TYPES = ['openai', 'gemini', 'claude'];
 
 function cfgFile(name) {
@@ -175,7 +175,7 @@ async function interactiveAdd(rl, cfg) {
 // ---- Interactive main menu ----
 async function mainMenu(rl, name, cfg) {
   while (true) {
-    console.log(`\n━━━ 实例 [${name}] 端口=${(cfg.listen||{}).port} 密码=${cfg.gatewayKey ? '已设' : '无'} channels=${(cfg.channels||[]).length} ━━━`);
+    console.log(`\n━━━ 实例 [${name}] 端口=${(cfg.listen||{}).port} channels=${(cfg.channels||[]).length} ━━━`);
     const action = await askChoice(rl, '操作', [
       '查看渠道',
       '添加渠道',
@@ -215,7 +215,7 @@ async function mainMenu(rl, name, cfg) {
       }
       case '设置网关密码': {
         const k = await ask(rl, '网关密码 (空=取消密码保护)');
-        cfg.gatewayKey = k;
+
         console.log(k ? '✓ Gateway password set (remember to save)' : '✓ Password protection removed (remember to save)');
         break;
       }
@@ -332,7 +332,7 @@ function main() {
       else if (cmd2 === 'list') showChannels(cfg);
       else if (cmd2 === 'remove' && rest[0]) { cfg.channels = (cfg.channels||[]).filter(c => c.name !== rest[0]); saveCfg(inst, cfg); }
       else if (cmd2 === 'set-port' && rest[0]) { cfg.listen = cfg.listen||{}; cfg.listen.port = Number(rest[0]); saveCfg(inst, cfg); }
-      else if (cmd2 === 'set-key') { cfg.gatewayKey = rest[0]||''; saveCfg(inst, cfg); }
+
       else console.log('用法: agw.sh config [实例] <add|list|remove|set-port|set-key>');
       rl.close();
     })();
@@ -376,7 +376,7 @@ function main() {
   } else if (cmd === 'set-key') {
     let cfg = loadCfg(name);
     if (!cfg) { console.log(`✗ Instance [${name}] config not found`); process.exit(1); }
-    cfg.gatewayKey = rest[0] || '';
+
     saveCfg(name, cfg); console.log(rest[0] ? `✓ Gateway password set, restart: agw.sh restart ${name}` : `✓ Password cleared, restart: agw.sh restart ${name}`);
   } else if (cmd === 'set-web-token') {
     let cfg = loadCfg(name);
@@ -390,7 +390,7 @@ function main() {
     if (!cfg) { console.log(`✗ Instance [${name}] config not found`); process.exit(1); }
     const dir = path.dirname(cfgFile(name));
     if (!fs.existsSync(path.join(dir, 'cert.pem')) || !fs.existsSync(path.join(dir, 'key.pem'))) {
-      console.log('✗ 证书不存在, 请先运行: bash ~/ai-gateway/gen-cert.sh');
+      console.log('✗ 证书不存在, 请先运行: bash ~/OpenAGW/gen-cert.sh');
       process.exit(1);
     }
     cfg.tls = { enable: true, cert: 'cert.pem', key: 'key.pem' };

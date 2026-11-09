@@ -96,7 +96,6 @@ function readCfg(file) {
   const up = await fakeUpstream();
   fs.writeFileSync(tmpCfg, JSON.stringify({
     listen: { host: '127.0.0.1', port: 0 },
-    gatewayKey: '',
     webToken: 'test-admin',
     proxies: { dead: { type: 'socks5', host: '127.0.0.1', port: 1 } },
     apiKeys: [

@@ -46,7 +46,7 @@ function responsesBody() {
   const cfgFile = path.join(dir, 'config.json');
   fs.writeFileSync(cfgFile, JSON.stringify({
     listen: { host: '127.0.0.1', port: 0 },
-    gatewayKey: '', webToken: '', panel: { openBrowser: false }, modelSync: { enable: false }, probe: { enable: false },
+    webToken: '', panel: { openBrowser: false }, modelSync: { enable: false }, probe: { enable: false },
     openaiExtras: { enable: false, upstreamResponses: true },   // legacy, must be ignored
     channels: [
       { name: 'lock', type: 'openai', baseUrl: 'http://127.0.0.1:' + upPort + '/relay', path: 'custom/chat?fixed=1', apiKey: 'x', models: ['lock'] },

@@ -97,7 +97,7 @@ async function startGateway(upPort, extra) {
   const cfgFile = path.join(dir, 'config.json');
   const cfgObj = Object.assign({
     listen: { host: '127.0.0.1', port: 0 },
-    gatewayKey: '', webToken: '', panel: { openBrowser: false }, modelSync: { enable: false }, probe: { enable: false },
+    webToken: '', panel: { openBrowser: false }, modelSync: { enable: false }, probe: { enable: false },
     channels: [{ name: 'up', type: 'openai', baseUrl: 'http://127.0.0.1:' + upPort, apiKey: 'x', models: ['m'], default: true }],
   }, extra || {});
   fs.writeFileSync(cfgFile, JSON.stringify(cfgObj));

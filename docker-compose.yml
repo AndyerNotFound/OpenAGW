@@ -1,6 +1,6 @@
 # Optional; not required (the root Dockerfile single container works)
 services:
-  ai-gateway:
+  openagw:
     build: .
     # host-port:container-port; the left side must match listen.port in data/config.json (default 16384)
     ports:
@@ -11,13 +11,14 @@ services:
     restart: unless-stopped
     # healthcheck inherits the image HEALTHCHECK (TCP probe of the default instance port)
     # Public deployment tips:
-    #  1. Set a gatewayKey (client password) first: docker compose exec ai-gateway sh -c 'vi /app/data/config.json',
+    #  1. Set a gatewayKey (client password) first: docker compose exec openagw sh -c 'vi /app/data/config.json',
     #     then docker compose restart; panel login uses one-time links, no standing password needed
-    #  2. Panel login: docker compose exec ai-gateway node /app/agw.js web login
+    #  2. Panel login: docker compose exec openagw node /app/agw.js web login
     #     (replace 127.0.0.1 in the printed link with the server address; instance: --inst <name>)
     #  3. Multi-instance: creating one in the panel writes /app/data/config.<name>.json; hot-loaded by the single process, no restart
     #  4. HTTPS: terminate at a front reverse proxy (Caddy/Nginx) or run agw-tls setup inside the container
-    #     in-container self-signed certs need the openssl CLI (not in the image): docker compose exec ai-gateway apk add --no-cache openssl
+    #     in-container self-signed certs need the openssl CLI (not in the image): docker compose exec openagw apk add --no-cache openssl
 
 volumes:
+  # Volume name kept from the ai-gateway era on purpose: renaming it would orphan existing data
   ai-gateway-data:

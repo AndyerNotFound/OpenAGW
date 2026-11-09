@@ -17,16 +17,20 @@ const { setupProbe } = require('./upstream');
 const state = require('./state');
 const rt = require('./runtime');
 const panelAuth = require('./panel-auth');
+const { completePath, isEndpointHead } = require('./endpoints');
+const { INST_NAME_RE, RESERVED_PATHS, isPanelPath } = require('./paths');
 
 // ================= Multi-instance pool (one process hosts every config*.json) =================
 //   - main port = default instance's listen.port, routes /<instance>/ prefixes; no prefix = default
 //   - plaintext instances keep their own compat port (old clients, no prefix needed)
 //   - TLS instances listen nowhere themselves: only the main port's HTTPS + /<instance>/ reaches them
 //   - config saves and instance create/rename/delete/start/stop all apply hot, no restart
-const INST_NAME_RE = /^[A-Za-z0-9_-]{1,32}$/;
-// Reserved first path segments: never routed as an instance name (avoids clashing with API/admin endpoints)
-const RESERVED_PATHS = new Set(['v1', 'v1beta', 'v1alpha', 'admin', 'health', 'status', 'favicon.ico', 'robots.txt', 'credits', 'auth', 'plugins', 'user', 'dashboard']);
-// Upstream balance passthrough (OpenAI-semantics billing endpoints): accepts both with and without the /v1 prefix (some old clients configure base without /v1)
+// INST_NAME_RE / RESERVED_PATHS live in paths.js (shared with admin.js, so the panel and the
+// router can never disagree about which names are off limits).
+// Upstream balance passthrough (OpenAI-semantics billing endpoints). The alias table keeps the
+// no-/v1 spelling for clients that configure a bare base URL, but note that the public path
+// whitelist in server.js only admits /v1*, so the bare aliases stay 404 on purpose; endpoint
+// completion (endpoints.js) does not cover balance paths either.
 // Aliases cover common clients/relay tools' balance paths; a hit routes through fetchBalanceCached for the upstream account balance
 const BILLING_PATHS = new Set([
 // Official OpenAI dashboard billing (common with third-party clients/relay panels)
@@ -218,6 +222,13 @@ function poolLoadInstance(pool, name) {
   const cfg = loadConfig(f);
   cfg._name = name;
   cfg._disabled = !!cfg.disabled;
+// An instance named after an endpoint head (chat / models / images …) shadows the bare path of
+// that endpoint: /chat/completions then means "instance chat + /completions". A name the router
+// reserves (credits / auth / user …) is worse: /<name>/... never reaches the instance at all, it is
+// only reachable on its own compat port. The panel refuses both for new names; an instance that
+// already carries one keeps working, with one warning per load so the cause is visible in the log.
+  if (isEndpointHead(name)) logErr('[pool] 实例名 ' + name + ' 与 API 端点首段同名: 裸 /' + name + '/... 会优先当作实例前缀 (建议改名)');
+  else if (RESERVED_PATHS.has(name)) logErr('[pool] 实例名 ' + name + ' 是网关保留路径: 主端口的 /' + name + '/... 到不了该实例, 只能用它自己的端口 (建议改名)');
   try {
     if (!old) panelAuth.ensure(cfg, name);
     else {
@@ -312,7 +323,7 @@ function poolRoute(pool, req, p) {
     if (name) {
       const cfg = pool.instances.get(name);
       if (cfg) {
-        if (cfg._disabled) return { error: '实例已停用: ' + name, status: 503 };
+        if (cfg._disabled && !isPanelPath(p)) return { error: '实例已停用: ' + name, status: 503 };
         return { cfg, path: p, name, via: 'port' };
       }
     }
@@ -322,8 +333,20 @@ function poolRoute(pool, req, p) {
   if (m && !RESERVED_PATHS.has(m[1])) {
     const name = m[1];
     const cfg = pool.instances.get(name);
-    if (!cfg) return { error: '未知实例: ' + name + ' (可用实例: ' + [...pool.instances.keys()].join(', ') + ')', status: 404 };
-    if (cfg._disabled) return { error: '实例已停用: ' + name, status: 503 };
+    if (!cfg) {
+// Endpoint completion: /chat/completions is an API path, not an instance called "chat" — fall
+// through to the default instance, where server.js fills in the missing /v1. Only a first segment
+// that is a known endpoint head qualifies, so a mistyped instance name still gets its 404 instead
+// of silently landing on default; an instance that really exists always wins over completion.
+      if (isEndpointHead(m[1]) && completePath(p) !== p) {
+        const def = pool.instances.get('default');
+        if (!def) return { error: 'default 实例不存在', status: 503 };
+        if (def._disabled && !isPanelPath(p)) return { error: '实例已停用: default', status: 503 };
+        return { cfg: def, path: p, name: 'default', via: 'default' };
+      }
+      return { error: '未知实例: ' + name + ' (可用实例: ' + [...pool.instances.keys()].join(', ') + ')', status: 404 };
+    }
+    if (cfg._disabled && !isPanelPath(p)) return { error: '实例已停用: ' + name, status: 503 };
     const blk = tlsBlocked(pool, name, req);
     if (blk) return blk;
     const rest = p.slice(name.length + 1) || '/';
@@ -331,6 +354,10 @@ function poolRoute(pool, req, p) {
   }
   const cfg = pool.instances.get('default');
   if (!cfg) return { error: 'default 实例不存在', status: 503 };
+// A disabled default instance must stay disabled on the unprefixed path too: this branch is what
+// a bare base URL (/chat/completions, /models …) and every panel-free request lands on. Panel paths
+// are the exception — otherwise stopping an instance would lock the panel that restarts it.
+  if (cfg._disabled && !isPanelPath(p)) return { error: '实例已停用: default', status: 503 };
   return { cfg, path: p, name: 'default', via: 'default' };
 }
 

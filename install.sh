@@ -1,16 +1,16 @@
 #!/bin/bash
-# ai-gateway one-shot installer (Linux / macOS / Termux)
+# OpenAGW one-shot installer (Linux / macOS / Termux)
 # Usage: curl -fsSL <raw-url>/install.sh | bash
 #    or: bash install.sh [install-dir]
 # Env: AGW_REPO=<source archive URL>  overrides the default GitHub archive (offline: file:///path/main.tar.gz)
 set -e
 
-DIR="${1:-$HOME/ai-gateway}"
-ARCHIVE="${AGW_REPO:-https://github.com/AndyerNotFound/ai-gateway-AI/archive/refs/heads/main.tar.gz}"
+DIR="${1:-$HOME/OpenAGW}"
+ARCHIVE="${AGW_REPO:-https://github.com/AndyerNotFound/OpenAGW/archive/refs/heads/main.tar.gz}"
 
-echo "=== ai-gateway one-click install ==="
+echo "=== OpenAGW one-click install ==="
 echo "Install dir: $DIR"
-if [ "$ARCHIVE" != "https://github.com/AndyerNotFound/ai-gateway-AI/archive/refs/heads/main.tar.gz" ]; then echo "Source: $ARCHIVE"; fi
+if [ "$ARCHIVE" != "https://github.com/AndyerNotFound/OpenAGW/archive/refs/heads/main.tar.gz" ]; then echo "Source: $ARCHIVE"; fi
 
 if ! command -v node >/dev/null 2>&1; then
   echo "✗ node not found. Install Node.js 18+ first:"
@@ -89,14 +89,12 @@ else
   echo ""
   echo "--- Initial config (non-interactive install uses defaults; edit $CONFIG later) ---"
   PORT=$(ask "Listen port [16384]: " "16384")
-  GWKEY=$(ask "Gateway password (for client access; empty=no auth, REQUIRED for public use!): " "")
   CHTYPE=$(ask "First channel type [openai] (openai/claude/gemini): " "openai")
   CHURL=$(ask "Channel Base URL: " "https://api.deepseek.com")
   CHKEY=$(ask "Channel API Key: " "")
   cat > "$CONFIG" <<EOF
 {
   "listen": { "host": "0.0.0.0", "port": $PORT },
-  "gatewayKey": "$GWKEY",
   "panel": { "openBrowser": true },
   "channels": [
     { "name": "default", "type": "$CHTYPE", "baseUrl": "$CHURL", "apiKey": "$CHKEY", "default": true }
@@ -157,7 +155,4 @@ echo "  Client base_url: http://127.0.0.1:$PORT/v1"
 echo "  Panel login: agw web login"
 echo "  Admin: agw start|stop|restart|status  (or bash $DIR/agw.sh ...)"
 echo "  Log: $LOG"
-GWKEY_SET=$(node -e 'try{const fs=require("fs");let raw=fs.readFileSync(process.argv[1],"utf8");try{const c=require(process.argv[2]+"/crypt.js");if(c.isEncText(raw))raw=c.decryptText(raw,c.loadPass())}catch(_){};const k=JSON.parse(raw).gatewayKey;console.log(k?"1":"0")}catch(e){console.log("0")}' "$CONFIG" "$DIR" 2>/dev/null || echo 0)
-if [ "$GWKEY_SET" != "1" ]; then
-  echo "  ⚠ gatewayKey is empty: local use only; set it before public/LAN deployment"
-fi
+

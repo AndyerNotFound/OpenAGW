@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-/* crypt.js - ai-gateway config file encryption tool (zero deps, Node built-in crypto)
+/* crypt.js - OpenAGW config file encryption tool (zero deps, Node built-in crypto)
  * Encryption: AES-256-GCM; the key is derived from a passphrase via scrypt (N=16384,r=8,p=1); each file gets its own random salt+iv
  * File format: "AGWENC1:" + base64(salt[16] | iv[12] | authTag[16] | ciphertext)
- * Passphrase source: env AGW_CRYPT_PASS or the key file <ai-gateway>/.agwkey (written by enable, mode 600)
+ * Passphrase source: env AGW_CRYPT_PASS or the key file <OpenAGW>/.agwkey (written by enable, mode 600)
  * Usage: status / enable [--pass passphrase|--genkey] / disable [--keep-key] / changepass [--old old --pass new] / test
  * Note: a forgotten passphrase means encrypted configs are unrecoverable; restart instances after enable/disable
  */

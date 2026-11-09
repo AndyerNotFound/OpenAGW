@@ -15,7 +15,7 @@ const ok = (c, m) => { if (c) pass++; else { fail++; console.error('  ✗ ' + m)
   const cfgFile = path.join(dir, 'config.json');
   fs.writeFileSync(cfgFile, JSON.stringify({
     listen: { host: '127.0.0.1', port: 0 },
-    gatewayKey: '', panel: { openBrowser: false }, modelSync: { enable: false },
+    panel: { openBrowser: false }, modelSync: { enable: false },
     channels: [{ name: 'dummy', type: 'openai', baseUrl: 'http://127.0.0.1:9', apiKey: 'sk-t', models: ['m'], default: true }],
   }));
 

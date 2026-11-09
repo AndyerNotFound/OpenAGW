@@ -23,6 +23,10 @@ const { handleAdmin } = admin;
 const state = require('./state');
 const panelAuth = require('./panel-auth');
 const hot = require('./hot');
+const { completePath } = require('./endpoints');
+/* Endpoint completion logs once per bare path, not once per request: a client whose base URL
+ * has no /v1 would otherwise add a line to every single call. */
+const EP_LOGGED = new Set();
 
 // ================= HTTP service =================
 /* Greedy model segment: a model reference "instance:channel:model" contains colons itself,
@@ -60,12 +64,30 @@ async function handleHttp(cfg, req, res) {
 
   if (cfg.cors && req.method === 'OPTIONS') { res.writeHead(204, corsHeaders()); return res.end(); }
 
+// ===== Endpoint completion: a base URL that stops at the host still works =====
+// Runs after instance routing (so /<inst>/chat/completions completes on the stripped path) and
+// before the whitelist (so completion can never re-open a closed prefix: only the OpenAI-dialect
+// endpoints listed in endpoints.js are completed; /health /status /auth /admin ... are not there).
+  const completed = completePath(p);
+  if (completed !== p) {
+    if (!EP_LOGGED.has(p) && EP_LOGGED.size < 200) {
+      EP_LOGGED.add(p);
+      log('[path] 端点补全:', p, '→', completed);
+      if (EP_LOGGED.size === 200) log('[path] 端点补全日志已满(200 条), 后续不再逐条记录');
+    }
+    p = completed;
+  }
+
 // ===== Public route whitelist (2026-10-27): only /v1 /v1beta /auth /profile /admin pass (panel uses a one-time login link / session cookie) =====
 // Everything else 404s: /health /status* /user /plugins /credits are all closed; re-add when needed
+// (endpoint completion above rewrites a bare /chat/completions into /v1/chat/completions, so it
+//  passes this same whitelist — the closed prefixes are not in its list and still 404)
   const allowed = p === '/v1' || p.startsWith('/v1/')
     || p === '/v1beta' || p.startsWith('/v1beta/')
     || p === '/auth' || p.startsWith('/auth/')
     || p === '/profile' || p.startsWith('/profile/')
+    || p === '/plugins' || p.startsWith('/plugins/')
+    || p === '/api/app' || p.startsWith('/api/app/')
     || p === '/admin' || p.startsWith('/admin/');
   if (!allowed) return sendError('openai', res, 404, 'not found: ' + req.method + ' ' + p);
 
@@ -94,6 +116,26 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
     }
     return;
   }
+// ===== Native app protocol: GET /api/app/bootstrap =====
+  if (p === '/api/app/bootstrap' && req.method === 'GET') {
+    return require('./bootstrap').handleBootstrap(cfg, req, res, rt.PLUGINS);
+  }
+
+// ===== Plugin routes: /plugins[/<id>[/<path...>]] =====
+// (the whitelist above re-opens this prefix; dispatch lives in plugins.js)
+  if (p === '/plugins' || p.startsWith('/plugins/')) {
+    if (!rt.PLUGINS) return sendError('openai', res, 503, 'plugin kernel unavailable');
+    const go = (b) => Promise.resolve(rt.PLUGINS.handle(cfg, req, res, u, p, b))
+      .catch(e => { try { res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: '插件分发异常: ' + e.message })); } catch {} });
+    if (req.method === 'GET' || req.method === 'HEAD') { go(''); return; }
+    let pb = '';
+    const pu8 = utf8();
+    req.on('data', c => { pb += pu8(c); if (pb.length > 8 * 1024 * 1024) req.destroy(); });
+    req.on('end', () => go(pb));
+    req.on('error', () => {});
+    return;
+  }
+
 // ===== Accessible branch list (card auth, filtered by branches) =====
   if (p === '/v1/branches' && req.method === 'GET') {
     const authR = checkAuth(cfg, req, u.searchParams);
@@ -160,7 +202,7 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
         object: 'billing_subscription', has_payment_method: true, canceled: false, canceled_at: null, delinquent: null,
         access_until: Math.floor(Date.now() / 1000) + 31536000,
         soft_limit_usd: avail, hard_limit_usd: avail, system_hard_limit_usd: avail,
-        plan: { title: 'ai-gateway', id: 'ai-gateway' }, account_name: ch.name, ...common,
+        plan: { title: 'OpenAGW', id: 'openagw' }, account_name: ch.name, ...common,
       });
     };
     try {
@@ -225,7 +267,7 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
     req.on('error', () => {});
     return;
   }
-  if (!clientFormat) return sendError('openai', res, 404, 'unknown endpoint: ' + p + ' (支持: /v1/chat/completions | /v1/messages | /v1beta/models/{model}:generateContent|:streamGenerateContent; 其余 /v1/* 原样透传到 openai 渠道)');
+  if (!clientFormat) return sendError('openai', res, 404, 'unknown endpoint: ' + p + ' (支持: /v1/chat/completions | /v1/messages | /v1beta/models/{model}:generateContent|:streamGenerateContent; 其余 /v1/* 原样透传到 openai 渠道; base URL 不写 /v1 也认)');
 
   const authR = checkAuth(cfg, req, u.searchParams);
   if (!authR.ok) return sendError(clientFormat, res, authR.status || 401, authR.error || 'invalid key');
@@ -302,9 +344,12 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
 function startServer(cfg, opts = {}) {
   state.CUR_CFG = cfg;
   applyDefaults(cfg);
-  const cfgDir = cfg._configFile ? path.dirname(cfg._configFile) : path.join(os.homedir(), 'ai-gateway');
+  const cfgDir = cfg._configFile ? path.dirname(cfg._configFile) : path.join(os.homedir(), 'OpenAGW');
   admin.setDir(cfgDir);
-  if (rt.PLUGINS) admin.setPlugins(rt.PLUGINS);
+  if (rt.PLUGINS) {
+    admin.setPlugins(rt.PLUGINS);
+    rt.PLUGINS.setAdminCheck((c, rq, u) => admin.checkAdminAuth(c, rq, u && u.searchParams));
+  }
 
 // ===== Multi-instance mode: one process hosts all config*.json in the dir; main-port path routing + compatibility listening on instance ports =====
   if (opts.multi) {
@@ -316,7 +361,7 @@ function startServer(cfg, opts = {}) {
     admin.setSyncFn((inst) => syncModels((inst && pool.instances.get(inst)) || cfg));
     admin.setBalanceFn((c, ch, cb) => fetchChannelBalance(c, ch, cb));
     poolLoadAll(pool, cfg);
-    log(`ai-gateway v${VERSION} 就绪 (多实例单进程模式):`);
+    log(`OpenAGW v${VERSION} 就绪 (多实例单进程模式):`);
     log(`  主端口 ${pool.mainHost}:${pool.mainPort}${pool.mainTlsPort ? ' (https:' + pool.mainTlsPort + ')' : ''}  →  /实例名/v1/... 访问对应实例, 无前缀 = default`);
     for (const [name, c] of pool.instances) {
       const ports = [];
@@ -328,6 +373,9 @@ function startServer(cfg, opts = {}) {
   }
 
 // ===== Single-instance mode =====
+// A pool left over from an earlier multi-instance start in the same process would hijack every
+// request (poolRoute is consulted whenever CUR_POOL is set), so single mode clears it explicitly.
+  if (state.CUR_POOL) { state.CUR_POOL = null; admin.setPool(null); }
   try { panelAuth.ensure(cfg); } catch (e) { logErr('[panel] 初始化登录状态失败: ' + e.message); }
   admin.setUpstreamModels(ch => fetchUpstreamModels(cfg, ch));
   admin.setSyncFn(() => syncModels(cfg));
@@ -370,7 +418,7 @@ try { // cold-start restore
       logErr(`⚠ TLS 已启用但证书读取失败: ${e.message}`);
       logErr(`  cert: ${certPath}`);
       logErr(`  key:  ${keyPath}`);
-      logErr(`  请先运行 ~/ai-gateway/gen-cert.sh 生成证书, 或在 config.json 中设置 "tls": {"enable": false}`);
+      logErr(`  请先运行 ~/OpenAGW/gen-cert.sh 生成证书, 或在 config.json 中设置 "tls": {"enable": false}`);
       logErr(`  (TLS 开启后该实例只在 listen.port 上提供 HTTPS, 不再有明文入口)`);
       logErr(`  本次将以纯 HTTP 模式启动`);
     }
@@ -384,7 +432,7 @@ try { // cold-start restore
       server.listen(port, host, () => {
         server.removeAllListeners('error');
         const realPort = server.address().port;
-        log(`ai-gateway v${VERSION} 就绪: http://${host === '0.0.0.0' ? '127.0.0.1(本机)/局域网IP' : host}:${realPort}  配置: ${cfg._configFile}`);
+        log(`OpenAGW v${VERSION} 就绪: http://${host === '0.0.0.0' ? '127.0.0.1(本机)/局域网IP' : host}:${realPort}  配置: ${cfg._configFile}`);
         for (const ch of cfg.channels) log(`  渠道 [${ch.type}] ${ch.name} → ${ch.baseUrl}  proxy=${ch.proxy || '直连'}${ch.default ? '  (default)' : ''}`);
         for (const [k, v] of Object.entries(cfg.proxies)) log(`  代理 ${k} = ${v.type}://${v.host}:${v.port}${v.username ? ' (带认证)' : ''}`);
         resolve({ server, port: realPort, host, cfg });
@@ -399,7 +447,7 @@ try { // cold-start restore
     const results = { servers: [], ports: [], cfg };
 
     const logReady = () => {
-      log(`ai-gateway v${VERSION} 就绪 (配置: ${cfg._configFile}):`);
+      log(`OpenAGW v${VERSION} 就绪 (配置: ${cfg._configFile}):`);
       for (const [p, scheme] of results.ports) {
         log(`  ${scheme}://${host === '0.0.0.0' ? '127.0.0.1(本机)/局域网IP' : host}:${p}`);
       }

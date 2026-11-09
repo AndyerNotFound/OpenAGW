@@ -2,7 +2,7 @@
   "id": "signin",
   "name": "每日签到",
   "version": "1.0.0",
-  "author": "ai-gateway",
+  "author": "OpenAGW",
   "description": "用户每日签到领额度，支持连续签到统计",
   "hasServer": true,
   "userPage": "pages/user.html",

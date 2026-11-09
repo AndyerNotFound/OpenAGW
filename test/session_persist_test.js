@@ -32,7 +32,7 @@ function request(port, p, headers = {}) {
   const cfgFile = path.join(dir, 'config.json');
   fs.writeFileSync(cfgFile, JSON.stringify({
     listen: { host: '127.0.0.1', port: 0 },
-    gatewayKey: '', webToken: '',
+    webToken: '',
     modelSync: { enable: false }, probe: { enable: false },
     channels: [{ name: 'dummy', type: 'openai', baseUrl: 'http://127.0.0.1:9', apiKey: 'sk-test', models: ['m'], default: true }],
   }));

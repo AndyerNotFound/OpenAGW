@@ -75,4 +75,4 @@ if (check !== out) { fs.unlinkSync(tmp); throw new Error('Read-back verification
 fs.renameSync(tmp, file);
 fs.chmodSync(file, 0o600);
 console.log(`✓ Written back to ${path.basename(file)} (${encrypted ? 'kept encrypted' : 'plaintext'})`);
-console.log(`  重启生效: ~/ai-gateway/agw.sh restart`);
+console.log(`  重启生效: ~/OpenAGW/agw.sh restart`);

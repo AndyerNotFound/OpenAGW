@@ -50,7 +50,7 @@ function applyDefaults(cfg) {
   cfg.listen = cfg.listen || {};
   cfg.listen.port = Number(cfg.listen.port || 16384);
   cfg.listen.host = String(cfg.listen.host || '0.0.0.0');
-  cfg.gatewayKey = cfg.gatewayKey ? String(cfg.gatewayKey) : '';
+
 // Key card list normalization
   cfg.apiKeys = Array.isArray(cfg.apiKeys) ? cfg.apiKeys.filter(k => k && k.key) : [];
   // Multi-user support was removed (2026-10-30): drop the legacy credential table and the
@@ -115,6 +115,15 @@ cfg.tls.port = null; // legacy field, ignored: one entry per instance -- HTTPS o
   cfg.balanceFx.base = String(cfg.balanceFx.base || 'CNY').trim() || 'CNY';
   cfg.balanceFx.rates = (cfg.balanceFx.rates && typeof cfg.balanceFx.rates === 'object') ? cfg.balanceFx.rates : {};
   if (!(Number(cfg.balanceFx.rates[cfg.balanceFx.base]) > 0)) cfg.balanceFx.rates[cfg.balanceFx.base] = 1;
+// Circuit breaker: off by default. When enabled, a channel that fails >=threshold times
+// within windowSec goes into cooldown for cooldownSec (routing excludes it).
+  cfg.breaker = (cfg.breaker && typeof cfg.breaker === 'object') ? cfg.breaker : {};
+  cfg.breaker.enable = !!cfg.breaker.enable;
+  if (!(cfg.breaker.threshold > 0)) cfg.breaker.threshold = 3;
+  if (!(cfg.breaker.windowSec > 0)) cfg.breaker.windowSec = 60;
+  if (!(cfg.breaker.cooldownSec > 0)) cfg.breaker.cooldownSec = 120;
+// Routing: when true, random instead of round-robin (default false, backward compatible)
+  cfg.routeRandom = !!cfg.routeRandom;
   return cfg;
 }
 

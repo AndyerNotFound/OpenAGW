@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generate the ai-gateway local private CA (run once). Skipped if it exists; --force rebuilds and invalidates every installed device.
+# Generate the OpenAGW local private CA (run once). Skipped if it exists; --force rebuilds and invalidates every installed device.
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 CA_KEY="$DIR/ca.key"
@@ -13,7 +13,7 @@ fi
 
 openssl req -x509 -newkey rsa:3072 -nodes -days 3650 \
   -keyout "$CA_KEY" -out "$CA_PEM" \
-  -subj "/O=ai-gateway Local/CN=ai-gateway Local Root CA" \
+  -subj "/O=OpenAGW Local/CN=OpenAGW Local Root CA" \
   -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
   -addext "keyUsage=critical,keyCertSign,cRLSign" \
   -addext "subjectKeyIdentifier=hash" 2>/dev/null
@@ -25,4 +25,4 @@ openssl x509 -in "$CA_PEM" -noout -subject -enddate
 echo ""
 echo "  For distribution (public; never share the ca.key private key):"
 echo "    $CA_PEM"
-echo "  Install on other LAN devices: rename ca.pem to ai-gateway-ca.crt and install it as a CA certificate"
+echo "  Install on other LAN devices: rename ca.pem to openagw-ca.crt and install it as a CA certificate"

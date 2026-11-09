@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
-/* agw -- ai-gateway unified CLI (jihuasheng.md spec)
- * Entry: ~/bin/agw -> ~/ai-gateway/agw.js
+/* agw -- OpenAGW unified CLI
+ * Entry: ~/bin/agw -> ~/OpenAGW/agw.js
  * Reads config: file directly + crypt.js decryption (AGWENC1); writes config: hot-applied via the admin API (when the instance is running)
  */
 const fs = require('fs');
@@ -234,7 +234,7 @@ function cmdInst(argv) {
     let c; try { c = loadCfg(n); } catch (e) { return console.log(`  ${pad(n, 22)} ${C.red('(config read failed)')}`); }
     const port = (c.listen || {}).port || 16384;
     const tls = !!(c.tls && c.tls.enable);
-    console.log(`  ${pad(n, 22)} :${pad(port, 6)} ${tls ? 'HTTPS' : 'HTTP '}  key:${c.gatewayKey ? 'set' : '-'}  panel:${panelAuth.read(c, n) ? 'ready' : '-'}`);
+    console.log(`  ${pad(n, 22)} :${pad(port, 6)} ${tls ? 'HTTPS' : 'HTTP '}  panel:${panelAuth.read(c, n) ? 'ready' : '-'}`);
   });
   if (a === 'delete') {
     const name = argv[1]; if (!name) die('Usage: agw inst delete <name> [-y]');
@@ -256,7 +256,7 @@ function cmdInst(argv) {
   if (has('help')) return cmdInst(['help']);
   const onlyStatus = flags.length === 0;
   const touch = [];
-  if (has('--apikey')) touch.push(() => { const c = loadCfg(name); c.gatewayKey = get('--apikey') || ''; saveCfg(name, c); ok(`gatewayKey ${c.gatewayKey ? 'set (' + c.gatewayKey.length + ' chars)' : 'cleared'}`); });
+
   const wtv = get('--webtoken') !== undefined ? get('--webtoken') : get('--adminkey'); // optional long-lived API token; panel login uses agw web login
   if (has('--webtoken') || has('--adminkey')) touch.push(() => { const c = loadCfg(name); c.webToken = wtv || ''; saveCfg(name, c); ok(`webToken ${c.webToken ? 'set' : 'cleared'}`); });
   if (has('--tls')) touch.push(() => {
@@ -771,7 +771,7 @@ function cmdExport(argv) {
   ⚠ 导出为解密后的明文 JSON, 含全部 API Key, 输出后请立即转移到安全位置`)); return; }
   const targets = scope === 'all' ? listInsts() : [scope];
   const stamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
-  const outDir = path.join(HOME, 'ai-gateway-export-' + stamp);
+  const outDir = path.join(HOME, 'OpenAGW-export-' + stamp);
   fs.mkdirSync(outDir, { recursive: true });
   console.log(C.yel('⚠ 明文导出, 含全部密钥: ' + outDir));
   for (const t of targets) {
@@ -1239,7 +1239,7 @@ function loopInst(startName) {
     const ms = c.modelSync || {};
     const fetchMin = ms.enable === false ? 0 : (ms.intervalMin || Math.round((ms.intervalHours || 24) * 60));
     console.log(C.bold('■ 编辑实例 ' + cur) + C.dim('  (key=value 逐项生效, exit 返回)'));
-    console.log(`  name=${cur}  port=${port}  tls=${(c.tls && c.tls.enable) ? 'on' : 'off'}  apikey=${c.gatewayKey ? maskKey(c.gatewayKey) : C.dim('(empty)')}`);
+    console.log(`  name=${cur}  port=${port}  tls=${(c.tls && c.tls.enable) ? 'on' : 'off'}`);
     console.log(`  fetch=${fetchMin ? fetchMin + 'min' : 'off'}  filter=${(c.redact && c.redact.enable) ? 'on' : 'off'}`);
   };
   const editPost = body => api('POST', `/admin/api/config/${encodeURIComponent(cur)}`, body);
@@ -1269,7 +1269,7 @@ function loopInst(startName) {
     if (k === 'apikey') {
       const key = /^0$/.test(v) ? crypto.randomBytes(24).toString('base64url') : /^(none|clear|-|空)$/i.test(v) ? '' : v;
       if (!key && v && !/^(none|clear|-|空)$/i.test(v)) return console.log(C.yel('apikey: 填 key / 0=随机 / none=清除'));
-      return editPost({ gatewayKey: key }).then(() => { ok('Gateway-Key ' + (key ? 'set' : 'cleared')); editView(); }).catch(e => console.log(C.yel('保存失败: ' + e.message)));
+      return editPost({}).then(() => { ok('Config saved'); editView(); }).catch(e => console.log(C.yel('保存失败: ' + e.message)));
     }
     if (k === 'fetch') {
       const n = Math.max(0, Math.round(Number(v) || 0));
@@ -1763,7 +1763,7 @@ function cmdCrypt(argv) {
 /* ==================== main dispatch ==================== */
 function help(sub) {
   if (sub && CMDS[sub]) { console.log('agw ' + sub + ' —'); CMDS[sub](['help']); return; }
-  console.log(t(`agw — ai-gateway 统一 CLI (计划通规范)    []=可选  <>=值
+  console.log(t(`agw — OpenAGW 统一 CLI (计划通规范)    []=可选  <>=值
 
 实例
   agw inst list                                 列出全部实例

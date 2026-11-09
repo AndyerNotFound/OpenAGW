@@ -84,7 +84,7 @@ class MockAdapter extends BaseAdapter{
   }
   async getInstances(){ return {instances:this._insts.map(i=>({...i})), current:'default'}; }
   async getConfig(name){ return {name, port:this._insts.find(i=>i.name===name)?.port||16384,
-    gatewayKey:'', webToken:'(已设)', channels:(this._chs[name]||[]).map(c=>({...c})),
+    webToken:'(已设)', channels:(this._chs[name]||[]).map(c=>({...c})),
     proxies:this._pxs[name]||{},
     record:(this._rec&&this._rec[name])||{enable:false,server:''},
     routing:{maxRetry:3,timeoutSec:60,cooldownSec:30}}; }
@@ -100,18 +100,18 @@ class MockAdapter extends BaseAdapter{
   async syncModels(inst){ return {ok:true,instance:inst,channels:0,added:0,fails:0}; }
   async getStats(name){ return this._stats[name]||{requests:0,errors:0,uptime:0,byChannel:{}}; }
   async getLogs(name,lines){ return Array.from({length:Math.min(lines||50,50)},(_,i)=>
-    `[0${i%9}:${10+i}:22] ai-gateway v1.0.0 就绪 (配置: .../config.${name}.json)`).join('\n'); }
+    `[0${i%9}:${10+i}:22] OpenAGW v1.0.0 就绪 (配置: .../config.${name}.json)`).join('\n'); }
   async getRequests(name){ return [
     {id:'req_mock01',time:'09:41:22',model:'deepseek-chat',channel:'pool-a',status:200,duration:1840},
     {id:'req_mock02',time:'09:41:19',model:'kimi-k3',channel:'nvidia-k3-a',status:429,duration:310},
     {id:'req_mock03',time:'09:40:58',model:'claude-sonnet-4-5',channel:'pool-b',status:200,duration:7190}]; }
   async action(name,a){ const i=this._insts.find(x=>x.name===name); if(i&&a==='start')i.running=true; if(i&&a==='stop')i.running=false; return {ok:true}; }
-  async getKeys(inst){ return {keys:this._keys||(this._keys=[{key:'sk-mock1234567890abcdef',name:'演示卡',enable:true,quotaTokens:100000,usedTokens:35210,models:[],channels:[],expiresAt:'',note:'',createdAt:'2026-09-01T00:00:00Z'}]),gatewayKeySet:true}; }
-  async createKey(inst,body){ const k={key:'sk-mock'+Math.random().toString(36).slice(2,20),name:body.name||'',enable:true,quotaTokens:body.quotaTokens||0,usedTokens:0,models:body.models||[],channels:[],expiresAt:body.expiresAt||'',note:body.note||'',createdAt:new Date().toISOString()}; (this._keys=this._keys||[]).push(k); return {ok:true,key:k}; }
-  async updateKey(inst,body){ const k=(this._keys||[]).find(x=>x.key===body.key); if(k){ if(body.enable!==undefined)k.enable=body.enable; if(body.resetUsage)k.usedTokens=0; if(body.addQuota)k.quotaTokens+=body.addQuota; } return {ok:true}; }
+  async getKeys(inst){ return {keys:this._keys||(this._keys=[{key:'sk-mock1234567890abcdef',name:'演示卡',enable:true,quotaTokens:100000,usedTokens:35210,models:[],channels:[],expiresAt:'',note:'',createdAt:'2026-09-01T00:00:00Z'}])}; }
+  async createKey(inst,body){ const k={key:'sk-mock'+Math.random().toString(36).slice(2,20),name:body.name||'',role:body.role||'user',enable:true,quotaTokens:body.quotaTokens||0,usedTokens:0,models:body.models||[],channels:[],expiresAt:body.expiresAt||'',note:body.note||'',createdAt:new Date().toISOString()}; (this._keys=this._keys||[]).push(k); return {ok:true,key:k}; }
+  async updateKey(inst,body){ const k=(this._keys||[]).find(x=>x.key===body.key); if(k){ if(body.enable!==undefined)k.enable=body.enable; if(body.role)k.role=body.role; if(body.resetUsage)k.usedTokens=0; if(body.addQuota)k.quotaTokens+=body.addQuota; } return {ok:true}; }
   async deleteKey(inst,key){ this._keys=(this._keys||[]).filter(x=>x.key!==key); return {ok:true}; }
   async getAdminAuth(inst){ return {hasAdminKey:true,secondKeySet:false,totpEnabled:false}; }
-  async setAdminAuth(inst,body){ return {ok:true,secondKeySet:!!body.secondKey,totpEnabled:body.totpAction==='enable',totpSecret:body.totpAction==='enable'?'JBSWY3DPEHPK3PXP':null,otpauthUrl:'otpauth://totp/ai-gateway-demo?secret=JBSWY3DPEHPK3PXP&issuer=ai-gateway'}; }
+  async setAdminAuth(inst,body){ return {ok:true,secondKeySet:!!body.secondKey,totpEnabled:body.totpAction==='enable',totpSecret:body.totpAction==='enable'?'JBSWY3DPEHPK3PXP':null,otpauthUrl:'otpauth://totp/OpenAGW-demo?secret=JBSWY3DPEHPK3PXP&issuer=OpenAGW'}; }
   async getTunnel(){ return this._tunnel||{running:false,url:'',log:[]}; }
   async tunnelAction(action){ this._tunnel = action==='start' ? {running:true,url:'https://demo-abc-xyz.trycloudflare.com',log:[]} : {running:false,url:'',log:[]}; return {ok:true,...this._tunnel}; }
   async getBalance(inst,ch){ return {ok:true,channel:ch,balance:'42.00',unit:'CNY'}; }
@@ -504,8 +504,8 @@ async function renderKeys(){
   const cur = await fillInstSelect($('#topInst'), Store.inst, signal); Store.inst=cur;
   try{
     const cfg=await adapter.getConfig(cur,signal);
-    $('#ky-gatewayKey').value = cfg.gatewayKey && cfg.gatewayKey!=='(已设)' ? cfg.gatewayKey : '';
-    $('#ky-gatewayKey').placeholder = cfg.gatewayKey==='(已设)' ? '(已设, 留空不改)' : '留空=不校验';
+
+
     $('#ky-webToken').value = cfg.webToken && cfg.webToken!=='(已设)' ? cfg.webToken : '';
     $('#ky-webToken').placeholder = cfg.webToken==='(已设)' ? '(已设, 留空不改)' : '留空=不启用 API 令牌';
     $('#ky-channels').innerHTML=(cfg.channels||[]).map(ch=>
@@ -611,7 +611,7 @@ async function renderCards(){
       const limits=[k.models&&k.models.length?`限模型 ${k.models.join('/')}`:null, k.expiresAt?`${String(k.expiresAt).slice(0,10)}到期`:null].filter(Boolean).join(' · ');
       return listItem({
         icon:'<span class="msym">confirmation_number</span>',
-        headline:esc(k.name||'(无名卡)')+` <span class="tag" style="color:${stateColor}">${state}</span>`,
+        headline:esc(k.name||"(无名卡)")+` <span class="tag" style="color:${k.role==="admin"?"var(--md-sys-color-tertiary)":stateColor}">${k.role==="admin"?"管理":state}</span>`,
         sub:`${esc(k.key.slice(0,10))}… · 用量 ${fmtTok(used)}${quota>0?' / '+fmtTok(quota)+' ('+pct+'%)':'(不限额)'}${limits?' · '+esc(limits):''}${k.note?' · '+esc(k.note):''}`,
         endHtml:`<div class="row-acts">
           <button type="button" class="icon-act" data-action="copyKey" data-key="${escAttr(k.key)}" title="复制完整Key"><span class="msym">content_copy</span></button>
@@ -636,7 +636,7 @@ async function openCardDialog(){
       const v=dlgValue();
       if(!String(v.name||'').trim()){ snack('名称必填',true); return false; }
       const quotaWan=Number(v.quotaWan)||0;
-      const body={ name:String(v.name).trim(), quotaTokens:Math.round(quotaWan*10000),
+      const body={ name:String(v.name).trim(), role:document.getElementById('ed-role').value, quotaTokens:Math.round(quotaWan*10000),
         models:String(v.models||'').split(',').map(s=>s.trim()).filter(Boolean),
         expiresAt:String(v.expiresAt||'').trim(), note:String(v.note||'').trim() };
       try{
@@ -645,7 +645,7 @@ async function openCardDialog(){
         openDialog('发卡成功', `<div style="display:flex;flex-direction:column;gap:12px;padding-top:8px">
           <div style="font-size:13px;color:var(--md-sys-color-on-surface-variant)">完整 Key (配置里可查, 也可随时回来复制):</div>
           <div class="mono" style="word-break:break-all;background:var(--md-sys-color-surface-container);padding:12px;border-radius:12px;user-select:all">${esc(k.key||'')}</div>
-          <div style="font-size:13px">客户端用法: base_url 填 <span class="mono">http://&lt;网关地址&gt;:${Store.mainPort||'主端口'}/${esc(Store.inst==='default'?'':Store.inst+'/')}v1</span>, API Key 填上面的 Key</div>
+          <div style="font-size:13px">客户端用法: base_url 填 <span class="mono">http://&lt;网关地址&gt;:${Store.mainPort||'主端口'}/${esc(Store.inst==='default'?'':Store.inst+'/')}v1</span>（末尾 /v1 可省略）, API Key 填上面的 Key</div>
           <md-filled-button id="cd-copy-new">复制 Key</md-filled-button>
         </div>`, {hideCancel:true});
         setTimeout(()=>{ const b=$('#cd-copy-new'); if(b) b.onclick=()=>{ navigator.clipboard&&navigator.clipboard.writeText(k.key||''); snack('已复制'); }; },50);
@@ -1369,7 +1369,7 @@ if(Object.keys(modelMap).length) ch.modelMap=modelMap; // never send an arrow-le
 }
 async function saveKeys(){
   try{
-    const patch={gatewayKey:$('#ky-gatewayKey').value, webToken:$('#ky-webToken').value, channels:{}};
+    const patch={webToken:$('#ky-webToken').value, channels:{}};
     $$('#ky-channels [data-keyfor]').forEach(el=>{ patch.channels[el.dataset.keyfor]=el.value; });
     await adapter.saveConfig(Store.inst,patch); snack('密钥已保存'); await renderKeys();
   }catch(e){ snack(e.message,true); }

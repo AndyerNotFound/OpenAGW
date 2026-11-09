@@ -28,8 +28,43 @@ if (at && t < at) return false;         // lock time not reached yet
 if (until && t >= until) return false;  // past the unlock time
   return true;
 }
-function pickChannels(cfg, model, forceName) {
-const chs = (cfg.channels || []).filter(c => !channelLocked(c)); // locked channels stay out of routing
+// ---- Circuit breaker (channel-level) ----
+//// Returns true when the channel is in cooldown (tripped).
+function channelBroken(cfg, chName, now) {
+  if (!cfg || !cfg._breakerState) return false;
+  const s = cfg._breakerState[chName];
+  if (!s || !(s.until > 0)) return false;
+  return (now || Date.now()) < s.until;
+}
+//// Record a channel failure; trip the breaker when >=threshold failures within windowSec.
+function breakerFail(cfg, chName) {
+  if (!cfg || !(cfg.breaker && cfg.breaker.enable)) return;
+  const thresh = Math.max(1, Number(cfg.breaker.threshold) || 3);
+  const win = Math.max(1, Number(cfg.breaker.windowSec) || 60) * 1000;
+  const cool = Math.max(1, Number(cfg.breaker.cooldownSec) || 120) * 1000;
+  if (!cfg._breakerState) cfg._breakerState = {};
+  const s = cfg._breakerState[chName] = cfg._breakerState[chName] || { fails: [], until: 0 };
+  s.fails.push(Date.now());
+  if (s.fails.length > thresh * 3) s.fails = s.fails.slice(-thresh * 2); // cap
+  const now = Date.now();
+  const recent = s.fails.filter(t => now - t < win).length;
+  if (recent >= thresh && !(s.until > now)) {
+    s.until = now + cool;
+  }
+}
+//// Clear failure history on success (cooldown still runs on time).
+function breakerReset(cfg, chName) {
+  if (!cfg || !cfg._breakerState) return;
+  const s = cfg._breakerState[chName];
+  if (s) s.fails = [];
+}
+//// Exclude broken AND locked channels from routing.
+function _routeChannelExcluded(cfg, ch, now) {
+  return channelLocked(ch, now) || channelBroken(cfg, ch && ch.name, now);
+}
+
+function pickChannels(cfg, model, forceName, preferChannel) {
+const chs = (cfg.channels || []).filter(c => !_routeChannelExcluded(cfg, c)); // locked / circuit-broken stay out
   const candidates = [];
   // manual routing: x-agw-channel header > instance forceChannel > auto match. A hit pins the single channel; no rotation
   const forced = forceName ? String(forceName).trim() : '';
@@ -56,16 +91,25 @@ const chs = (cfg.channels || []).filter(c => !channelLocked(c)); // locked chann
     logErr('[route] 一次性路由的渠道已不存在, 走自动匹配: ' + onceName);
   }
   if (model) {
-// 1) exact hit in modelMap
+// Collect every channel that serves this model, from BOTH modelMap (rename) and the
+// models list. Dedupe is per-channel: a channel matched via modelMap is not added again
+// for its models list. Crucially, a channel that only lists the model in `models` is NOT
+// masked by another channel's modelMap hit (the old `!candidates.length` short-circuit
+// silently dropped such channels and skewed round-robin).
+    const added = new Set();
+// 1) exact hit in modelMap -> upstreamModel = the renamed real name
     for (const ch of chs) {
       if (ch.modelMap && Object.prototype.hasOwnProperty.call(ch.modelMap, model)) {
         candidates.push({ ch, upstreamModel: String(ch.modelMap[model]) });
+        added.add(ch);
       }
     }
-// 2) hit in the models list (avoids adding the same channel twice via modelMap)
-    if (!candidates.length) {
-      for (const ch of chs) {
-        if (ch.models && ch.models.includes(model)) candidates.push({ ch, upstreamModel: model });
+// 2) hit in the models list -> upstreamModel = the model name as-is
+    for (const ch of chs) {
+      if (added.has(ch)) continue;
+      if (ch.models && ch.models.includes(model)) {
+        candidates.push({ ch, upstreamModel: model });
+        added.add(ch);
       }
     }
   }
@@ -76,12 +120,30 @@ const chs = (cfg.channels || []).filter(c => !channelLocked(c)); // locked chann
     for (const ch of pool) candidates.push({ ch, upstreamModel: model || '' });
   }
   if (!candidates.length) return [];
-// round-robin: a counter keyed by model decides the starting offset
-  if (!cfg._rr) cfg._rr = {};
-  const key = model || '__nomodel__';
-  cfg._rr[key] = ((cfg._rr[key] || 0) + 1) % candidates.length;
-  const rot = cfg._rr[key];
-  return candidates.slice(rot).concat(candidates.slice(0, rot));
+// Routing rotation: round-robin (default) or random (opt-in via cfg.routeRandom).
+// Round-robin: a counter keyed by model decides the starting offset.
+// Random: each request gets a fresh uniformly random offset; no state, better
+//   distribution for first-hit allocation and fallthrough cascades.
+  let rot;
+  if (cfg.routeRandom) {
+    rot = Math.floor(Math.random() * candidates.length);
+  } else {
+    if (!cfg._rr) cfg._rr = {};
+    const key = model || '__nomodel__';
+    cfg._rr[key] = ((cfg._rr[key] || 0) + 1) % candidates.length;
+    rot = cfg._rr[key];
+  }
+  const rotated = candidates.slice(rot).concat(candidates.slice(0, rot));
+// Sticky channel preference (prompt-cache affinity): the channel that last served this
+// key+model goes first; failures still fall through to the round-robin order.
+  if (preferChannel) {
+    const idx = rotated.findIndex(c => c.ch.name === preferChannel);
+    if (idx > 0) {
+      const pref = rotated.splice(idx, 1)[0];
+      rotated.unshift(pref);
+    }
+  }
+  return rotated;
 }
 
 // Request/instance-level forced channel: the header wins (this request only), then instance config
@@ -214,14 +276,13 @@ function keyCreditsJSON(uk) {
 }
 
 // Auth: returns {ok, admin, userKey, status, error}
-//  - admin=true: gatewayKey matched (or keyless no-auth mode)
+//  - admin=true: admin-role key matched (or keyless no-auth mode)
 //  - userKey: matched an apiKeys card (quota/expiry/disabled/model whitelist checked here)
 function checkAuth(cfg, req, query) {
   const h = req.headers;
   const auth = h.authorization || '';
   const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
   const presented = bearer || h['x-api-key'] || h['x-goog-api-key'] || (query && query.get('key')) || '';
-  if (cfg.gatewayKey && presented && presented === cfg.gatewayKey) return { ok: true, admin: true };
   const keys = cfg.apiKeys || [];
   if (keys.length && presented) {
     const uk = keys.find(k => k.key && k.key === presented);
@@ -233,11 +294,12 @@ function checkAuth(cfg, req, query) {
       }
       if (uk.quotaTokens > 0 && (uk.usedTokens || 0) >= uk.quotaTokens)
         return { ok: false, status: 429, error: '额度已用尽 (' + (uk.usedTokens || 0) + '/' + uk.quotaTokens + ' tokens)' };
-      return { ok: true, userKey: uk };
+      if (uk.role === 'admin') return { ok: false, status: 403, error: '管理员密钥不能用于 API 访问' };
+      return { ok: true, userKey: uk, admin: false };
     }
   }
-  // no gatewayKey and no card = keyless (backward compatible)
-  if (!cfg.gatewayKey && !keys.length) return { ok: true, admin: true };
+  // no key cards = keyless (backward compatible)
+  if (!keys.length) return { ok: true, admin: true };
   return { ok: false, status: 401, error: 'invalid key' };
 }
 
@@ -328,7 +390,7 @@ function modelsResponse(cfg, format) {
     return { models: ms.map(m => ({ name: 'models/' + m, displayName: m, supportedGenerationMethods: ['generateContent', 'streamGenerateContent', 'countTokens'] })) };
   }
 // openai and claude fields merged so both SDKs can read it
-  return { object: 'list', data: ms.map(m => ({ id: m, object: 'model', type: 'model', created: 1700000000, owned_by: 'ai-gateway', display_name: m })) };
+  return { object: 'list', data: ms.map(m => ({ id: m, object: 'model', type: 'model', created: 1700000000, owned_by: 'openagw', display_name: m })) };
 }
 
-module.exports = { http, https, net, tls, fs, path, crypto, os, zlib, state, admin, pickChannels, channelLocked, forcedChannelName, globMatch, CJK_RE, countCjk, tokOf, analyzePrompt, estimatePromptTokens, estimatePromptDist, EST_RATIO_MIN, calibRatio, calibUpdate, scaleDist, pickChannel, collectJson, availableBranches, genApiKey, persistRuntimeCfg, keyCreditsJSON, checkAuth, cfgDirOf, keyUsageFile, loadKeyUsage, saveKeyUsage, makeGatewayApi, corsHeaders, jsonErr, sendJson, sendError, collectModels, modelsResponse };
+module.exports = { http, https, net, tls, fs, path, crypto, os, zlib, state, admin, pickChannels, channelLocked, channelBroken, breakerFail, breakerReset, forcedChannelName, globMatch, CJK_RE, countCjk, tokOf, analyzePrompt, estimatePromptTokens, estimatePromptDist, EST_RATIO_MIN, calibRatio, calibUpdate, scaleDist, pickChannel, collectJson, availableBranches, genApiKey, persistRuntimeCfg, keyCreditsJSON, checkAuth, cfgDirOf, keyUsageFile, loadKeyUsage, saveKeyUsage, makeGatewayApi, corsHeaders, jsonErr, sendJson, sendError, collectModels, modelsResponse };

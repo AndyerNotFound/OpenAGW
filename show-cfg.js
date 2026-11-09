@@ -10,7 +10,7 @@ try {
 try { cfg = JSON.parse(raw); }
 catch (e) { console.log("  (config parse failed: " + e.message.split("\n")[0] + ")"); process.exit(0); }
 const port = (cfg.listen && cfg.listen.port) || 16384;
-const gw = cfg.gatewayKey ? "set" : "none";
+
 const proxies = Object.keys(cfg.proxies || {});
 const chs = cfg.channels || [];
 const tls = cfg.tls || (cfg.listen && cfg.listen.tls) || {};

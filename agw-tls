@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# agw-tls — the single entry for ai-gateway encrypted access. Forget the details? Use this.
+# agw-tls — the single entry for OpenAGW encrypted access. Forget the details? Use this.
 #   agw-tls            see whether it works
 #   agw-tls use        print ready-to-run client code
 #   agw-tls trust      prepare certs to Download and show where to tap on the phone
@@ -16,9 +16,9 @@ DIR="$(cd "$(dirname "$SELF")" && pwd)"
 export PATH="$PATH:/data/data/com.termux/files/usr/bin"
 CA="$DIR/tls/ca.pem"
 SRVCERT="$DIR/data/cert.pem"
-EXPORTDIR="/sdcard/Download/ai-gateway"
-CRT="$EXPORTDIR/ai-gateway-ca.crt"
-CRT_SRV="$EXPORTDIR/ai-gateway-cert.crt"
+EXPORTDIR="/sdcard/Download/OpenAGW"
+CRT="$EXPORTDIR/openagw-ca.crt"
+CRT_SRV="$EXPORTDIR/openagw-cert.crt"
 KEYFILE="$DIR/data/.current-key-default"
 
 ip4() {
@@ -72,7 +72,7 @@ line() { printf '%s\n' "──────────────────�
 
 status() {
   local ip hp sp en; ip="$(ip4)"; hp="$(cfg httpport)"; sp="$(cfg httpsport)"; en="$(cfg enabled)"
-  line; echo " ai-gateway encrypted access"; line
+  line; echo " OpenAGW encrypted access"; line
   if [ "$en" = "true" ] && [ -n "$sp" ]; then
     echo "  Status   ✅ TLS on (single port: https only, no plaintext entry)"
     echo "  Use      https://${ip}:${sp}/v1"
@@ -103,7 +103,7 @@ use_() {
   line; echo " Copy any snippet below and it works (address ${url})"; line
   cat <<TXT
 【Python on computer】
-1. Copy $CRT from the phone to the computer, e.g. /Users/you/certs/ai-gateway-ca.crt
+1. Copy $CRT from the phone to the computer, e.g. /Users/you/certs/openagw-ca.crt
 2. Install: pip install openai
 3. Run this:
 
@@ -113,7 +113,7 @@ use_() {
     client = OpenAI(
         base_url="${url}",
         api_key="${key}",
-        http_client=httpx.Client(verify="/Users/you/certs/ai-gateway-ca.crt"),
+        http_client=httpx.Client(verify="/Users/you/certs/openagw-ca.crt"),
     )
     print(client.models.list())
 
@@ -121,7 +121,7 @@ use_() {
 1. Copy the same cert file
 2. Start with the cert path:
 
-    NODE_EXTRA_CA_CERTS=/Users/you/certs/ai-gateway-ca.crt node your-app.js
+    NODE_EXTRA_CA_CERTS=/Users/you/certs/openagw-ca.crt node your-app.js
 
    In code:
     const client = new OpenAI({ baseURL: "${url}", apiKey: "${key}" });
@@ -157,7 +157,7 @@ keeparg_() {
 clean_() {
   local f n=0
   # also sweep the legacy .pem names from older versions
-  for f in "$CRT" "$CRT_SRV" "$EXPORTDIR/ai-gateway-cert.pem" "$EXPORTDIR/README.txt"; do
+  for f in "$CRT" "$CRT_SRV" "$EXPORTDIR/openagw-cert.pem" "$EXPORTDIR/README.txt"; do
     if [ -e "$f" ]; then rm -f "$f" && n=$((n+1)); fi
     bash "$DIR/tls/cleanup.sh" cancel "$f" >/dev/null 2>&1
   done
@@ -182,13 +182,13 @@ export_() {
              $CRT_SRV"
   fi
   cat > "$EXPORTDIR/README.txt" 2>/dev/null <<'TXT'
-ai-gateway certificates
+OpenAGW certificates
 
-ai-gateway-ca.crt    private CA cert — install this on devices/computers once (no reinstall on IP change/renewal)
-ai-gateway-cert.crt  server cert (for viewing only; clients usually don't need it)
+openagw-ca.crt    private CA cert — install this on devices/computers once (no reinstall on IP change/renewal)
+openagw-cert.crt  server cert (for viewing only; clients usually don't need it)
 Private key.pem is NOT exported: it stays in the gateway dir; copying it to a public dir would hand over your identity
 
-Android: Settings → Security & privacy → More security settings → Encryption & credentials → Install a certificate → CA certificate → pick ai-gateway-ca.crt
+Android: Settings → Security & privacy → More security settings → Encryption & credentials → Install a certificate → CA certificate → pick openagw-ca.crt
 iPhone/iPad: Settings → General → VPN & Device Management → Install, then About → Certificate Trust Settings → enable full trust
 Windows: double-click → Install Certificate → Local Machine → Trusted Root Certification Authorities
 macOS: double-click → Keychain Access → the cert → Trust → Always Trust
@@ -227,7 +227,7 @@ Install once (no reinstall after IP changes or cert renewal):
 
 Phone (Android)
   Settings → Security & privacy → More security settings → Encryption & credentials → Install a certificate → CA certificate
-  → Install anyway → pick ai-gateway-ca.crt → on "your data may be monitored", confirm
+  → Install anyway → pick openagw-ca.crt → on "your data may be monitored", confirm
 
 iPhone / iPad
   Transfer the file to the phone → Settings → General → VPN & Device Management → Install
@@ -336,7 +336,7 @@ case "${1:-}" in
   *)         echo "Usage: agw-tls <command>   [no args = status]"
              echo "  status   show status"
              echo "  use      print ready-to-run client code"
-             echo "  export   export certs to /sdcard/Download/ai-gateway [--keep minutes, default 30]"
+             echo "  export   export certs to /sdcard/Download/OpenAGW [--keep minutes, default 30]"
              echo "  trust    export certs + print install steps [--keep minutes, default 5]"
              echo "  check    self-check"
              echo "  setup    one-click enable TLS"

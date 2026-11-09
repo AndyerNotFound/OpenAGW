@@ -1,6 +1,6 @@
 {
   "listen": { "host": "0.0.0.0", "port": 16384 },
-  "gatewayKey": "",
+
   "maxBodyBytes": 67108864,
   "connectTimeout": 15000,
   "responseTimeout": 180000,

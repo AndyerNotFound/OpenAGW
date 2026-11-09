@@ -1,6 +1,6 @@
-# ai-gateway — single-container relay
-# Build: docker build -t ai-gateway .
-# Run: docker run -d -p 16384:16384 -v ai-gateway-data:/app/data --name ai-gateway ai-gateway
+# OpenAGW — single-container relay
+# Build: docker build -t openagw .
+# Run: docker run -d -p 16384:16384 -v ai-gateway-data:/app/data --name openagw openagw
 # Config: /app/data/config.json (default instance) + /app/data/config.<name>.json (multi-instance); auto-generated on first start
 FROM node:22-alpine
 

@@ -180,7 +180,7 @@ function requestStream(port, route, body) {
   const cfgFile = path.join(dir, 'config.json');
   fs.writeFileSync(cfgFile, JSON.stringify({
     listen: { host: '127.0.0.1', port: 0 },
-    gatewayKey: '', webToken: '', panel: { openBrowser: false }, modelSync: { enable: false }, probe: { enable: false },
+    webToken: '', panel: { openBrowser: false }, modelSync: { enable: false }, probe: { enable: false },
     channels: [{ name: 'up', type: 'openai', baseUrl: 'http://127.0.0.1:' + up.port, apiKey: 'x', models: ['m'], default: true }],
   }));
   const cfg = G.loadConfig(cfgFile);

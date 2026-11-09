@@ -89,7 +89,7 @@ const waitPort = (port, tries = 80) => new Promise((res, rej) => {
   const backup = fs.existsSync(cfgPath) ? fs.readFileSync(cfgPath) : null;
   fs.writeFileSync(cfgPath, JSON.stringify({
     listen: { host: '127.0.0.1', port: GW },
-    gatewayKey: 'gw-test', panel: { openBrowser: false },
+    apiKeys: [{ key: 'sk-gw' }], panel: { openBrowser: false },
     modelSync: { enable: false },
     redact: { enable: true, response: false, extra: [] },
     channels: [
@@ -100,7 +100,7 @@ const waitPort = (port, tries = 80) => new Promise((res, rej) => {
   const gw = spawn('node', ['gateway.js'], { cwd: ROOT, env: { ...process.env, AGW_SINGLE: '1', AGW_HOT: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let gwLog = '';
   gw.stdout.on('data', d => gwLog += d); gw.stderr.on('data', d => gwLog += d);
-  const AUTH = { Authorization: 'Bearer gw-test' };
+  const AUTH = { Authorization: 'Bearer sk-gw' };
   try {
     await waitPort(GW);
     /* (2) /v1/models */
@@ -110,13 +110,14 @@ const waitPort = (port, tries = 80) => new Promise((res, rej) => {
     ok(!ids.includes('shared-model'), 'conflicted plain name not listed');
     ok(ids.includes('only-a'), 'unique model stays plain');
 
-    /* (3) plain name round-robins */
-    const seen = new Set();
-    for (let i = 0; i < 4; i++) {
+    /* (3) plain name sticks to the winning channel (prompt-cache affinity) */
+    let firstChan = null;
+    for (let i = 0; i < 3; i++) {
       const r = await reqJson(GW, 'POST', '/v1/chat/completions', { model: 'shared-model', messages: [{ role: 'user', content: 'hi' }] }, AUTH);
-      seen.add(JSON.parse(r.body).choices[0].message.content);
+      const cBody = JSON.parse(r.body).choices[0].message.content;
+      if (!firstChan) firstChan = cBody;
+      else eq(cBody, firstChan, 'sticky: same key+model sticks to channel (try ' + (i + 1) + ', got ' + cBody + ')');
     }
-    ok(seen.size === 2, 'plain name distributes across both channels (saw: ' + [...seen].join(' | ') + ')');
 
     /* (4) composite reference pins chanB; upstream receives the real name */
     for (let i = 0; i < 3; i++) {

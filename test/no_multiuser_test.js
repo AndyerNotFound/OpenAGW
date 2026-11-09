@@ -33,7 +33,6 @@ function request(port, p, headers = {}, method = 'GET', body = null) {
   const cfgFile = path.join(dir, 'config.json');
   fs.writeFileSync(cfgFile, JSON.stringify({
     listen: { host: '127.0.0.1', port: 0 },
-    gatewayKey: '',
     webToken: 'test-web-token',
     panel: { openBrowser: false },
     modelSync: { enable: false },

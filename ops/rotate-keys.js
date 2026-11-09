@@ -3,10 +3,10 @@
 /*
  * Periodic rotation of client keys (instance apiKey cards) -- zero-downtime edition.
  *
- * Why not rotate the gatewayKey:
- *   gatewayKey is a single-valued field: changing it invalidates every client at once, with no overlap window.
+ * Why not rotate the _gwkeyRemoved:
+ *   _gwkeyRemoved is a single-valued field: changing it invalidates every client at once, with no overlap window.
  *   apiKeys supports multiple entries + expiresAt, so a new key can ship while old keys stay valid through a grace period.
- *   to rotate a gatewayKey use --gateway <instance> --yes (clients break immediately; only do this in the night window).
+ *   to rotate a _gwkeyRemoved use --gateway <instance> --yes (clients break immediately; only do this in the night window).
  *
  * Goes through the admin HTTP API (gateway's internal saveCfg re-encrypts + hotReloads) instead of editing config.json directly,
  * so it never races the panel/gateway writes, and no process restart is needed.
@@ -16,7 +16,7 @@
  *   node ops/rotate-keys.js --dry-run
  *   node ops/rotate-keys.js --if-due          # rotate only when due (called by guard.sh)
  *   node ops/rotate-keys.js --now             # rotate now (writes only with --yes)
- *   node ops/rotate-keys.js --gateway qwen --yes   # replace an instance's gatewayKey immediately (destructive)
+ *   node ops/rotate-keys.js --gateway qwen --yes   # retired: prints the removal notice
  * Options: --inst default  --rotate-days 90  --grace-days 14  --quiet
  */
 const fs = require('fs');
@@ -138,8 +138,8 @@ async function cmdList(state) {
     const keys = (cfg.apiKeys || []);
     const auto = keys.filter(k => String(k.name || '').startsWith(AUTO_PREFIX));
     const active = keys.filter(k => isActive(k, Date.now()));
-    const gw = cfg.gatewayKey ? `gatewayKey=set(${cfg.gatewayKey.length})` : 'gatewayKey=-';
-    if (!keys.length && !cfg.gatewayKey) continue;
+    const gw = '';
+    if (!keys.length) continue;
     console.log(
       inst.padEnd(32),
       String((cfg.listen || {}).port || '?').padEnd(6),
@@ -217,15 +217,8 @@ function verifyKey(inst, port, key, cfg) {
   });
 }
 
-async function rotateGateway(inst, apply) {
-  const cfg = loadCfg(inst);
-  if (!cfg) throw new Error(`实例 ${inst} 不存在`);
-  if (!cfg.gatewayKey) { log(`${inst}: 未设置 gatewayKey，跳过`); return; }
-  const next = 'sk-' + require('crypto').randomBytes(24).toString('base64url').slice(0, Math.min(64, Math.max(8, Number(cfg.keyLength) || 32)));
-  if (!apply) { log(`[dry-run] ${inst}: 将把 gatewayKey 换成 ...${next.slice(-4)}（旧 key 立即失效）`); return; }
-  await api(inst, 'POST', `/admin/api/config/${encodeURIComponent(inst)}`, { gatewayKey: next });
-  log(`${inst}: ✓ gatewayKey 已更换（旧 key 立即失效）`);
-  if (!QUIET) console.log(`  ${next}`);
+async function rotateGateway() {
+  log('gatewayKey 设计已移除：不再有单值主密钥。请用 admin 角色的卡密管理管理面。');
 }
 
 process.on('unhandledRejection', (e) => { console.error('✗ ' + (e && e.message ? e.message : e)); process.exit(1); });
@@ -237,7 +230,7 @@ process.on('unhandledRejection', (e) => { console.error('✗ ' + (e && e.message
   if (flag('gateway')) {
     const inst = resolveInst(opt('gateway'));
     if (!flag('yes') && !flag('dry-run')) { console.error('破坏性操作：加 --yes 才会执行（先 --dry-run 看影响）'); process.exit(2); }
-    return rotateGateway(inst, !flag('dry-run'));
+    return rotateGateway();
   }
 
   const due = flag('now') || (Date.now() - new Date(state.lastRotate).getTime()) >= state.rotateDays * 86400e3;

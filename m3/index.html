@@ -212,7 +212,6 @@
       <md-filled-card>
         <div class="card-head"><div><div class="card-title">API 密钥</div><div class="card-sub">网关密码与渠道密钥</div></div></div>
         <div class="grid-form" style="margin-bottom:16px">
-          <md-outlined-text-field id="ky-gatewayKey" label="网关密码 gatewayKey" type="password" helper="留空=不校验"></md-outlined-text-field>
           <md-outlined-text-field id="ky-webToken" label="管理 API 令牌(webToken, 可选)" type="password" helper="面板登录不需要; 脚本/API 可选用，留空=本机 CLI 直接管理"></md-outlined-text-field>
         </div>
         <div id="ky-channels" class="list-gap" style="margin-bottom:16px"></div>
@@ -281,7 +280,7 @@
           <span class="mono" id="tn-url" style="word-break:break-all;background:var(--md-sys-color-surface-container);padding:10px;border-radius:10px;user-select:all"></span>
           <md-icon-button id="tn-copy" title="复制"><md-icon>content_copy</md-icon></md-icon-button>
         </div>
-        <div class="card-sub" style="margin-top:8px;color:var(--md-sys-color-error)">⚠️ 隧道开启=公网可访问! 务必设 gatewayKey 和 webToken</div>
+        <div class="card-sub" style="margin-top:8px;color:var(--md-sys-color-error)">⚠️ 隧道开启=公网可访问! 务必设 webToken</div>
       </md-filled-card>
 
       <md-filled-card>

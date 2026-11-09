@@ -2,7 +2,7 @@
 # [2026-10-21 eMudhra] node now uses the system cert store (emSign ECC Root CA - G3 removed)
 export NODE_OPTIONS="${NODE_OPTIONS//--use-openssl-ca/} --use-openssl-ca"
 export SSL_CERT_FILE="${SSL_CERT_FILE:-${PREFIX:-/data/data/com.termux/files/usr}/etc/tls/cert.pem}"
-# ai-gateway gateway management script (single-process, multi-instance mode)
+# OpenAGW gateway management script (single-process, multi-instance mode)
 # One node process hosts every config*.json in the directory:
 #   - the main port (default instance listen.port) routes by /<instance>/ path prefix; no prefix = default
 #   - each instance keeps its original port listening (compatible with old clients)
@@ -30,7 +30,8 @@ AGW_HOT="${AGW_HOT:-1}"
 
 # PID-reuse guard: confirm the process really is the gateway of THIS dir
 # (2026-10-10 incident: PID reused by u1s1-proxy caused a false "already running";
-#  the old global "ai-gateway/gateway.js" match also killed gateways installed elsewhere)
+#  the old global "ai-gateway/gateway.js" match also killed gateways installed elsewhere —
+#  this script only matches its own $DIR)
 proc_is_gw() {
   local pid="$1" cmd cwd
   [ -r "/proc/$pid/cmdline" ] || return 1
@@ -192,7 +193,7 @@ case "${1:-}" in
   show)         show_config ;;
   config)       shift; node "$DIR/cfg-cli.js" "$@" ;;
   *)
-    echo "ai-gateway gateway management (single-process multi-instance)"
+    echo "OpenAGW gateway management (single-process multi-instance)"
     echo "Usage: $0 <start|stop|restart|reload|status|list|logs [lines]|show|config ...>"
     echo "      restart/reload: hot swap (master holds ports; old worker drains in-flight then exits) — no request failures"
     echo ""

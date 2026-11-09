@@ -1,6 +1,6 @@
 'use strict';
 /**
- * ai-gateway Web admin panel (Material Design 3 style)
+ * OpenAGW Web admin panel (Material Design 3 style)
  * Referenced by gateway.js; provides the admin UI under each instance's /admin path
  * The admin API requires a panel session cookie, a local admin token, or the optional webToken
  */
@@ -13,14 +13,15 @@ const zlib = require('zlib');
 const crypto2 = require('crypto');
 const https2 = require('https');
 const panelAuth = require('./panel-auth');
+const { isEndpointHead } = require('./endpoints');
 const { VERSION, utf8 } = require('./util');
 
 // cloudflared tunnel global state
 let tunnelProc = null, tunnelUrl = '', tunnelLog = [], tunnelTimer = null, tunnelNext = null;
 
-// DIR prefers the current instance's config directory, falling back to ~/ai-gateway
+// DIR prefers the current instance's config directory, falling back to ~/OpenAGW
 let crypt = null; try { crypt = require('./crypt.js'); } catch (_) {}
-let DIR = path.join(os.homedir(), 'ai-gateway');
+let DIR = path.join(os.homedir(), 'OpenAGW');
 function setDir(dir) { DIR = dir; }
 const CORE = __dirname; // code root: static assets and scripts
 const DATA = () => DIR; // data root: config*/ball*/log/.run/plugins-data (injected by gateway setDir)
@@ -39,15 +40,48 @@ function setPool(p) { POOL = p; }
 //// plugin manager: injected by gateway
 let PLUGINS = null;
 function setPlugins(p) { PLUGINS = p; }
-// Instance name/path reserved-word validation (kept in sync with gateway.js)
-const INST_NAME_RE = /^[A-Za-z0-9_-]{1,32}$/;
-const RESERVED_PATHS = new Set(['v1', 'v1beta', 'v1alpha', 'admin', 'health', 'status', 'favicon.ico', 'robots.txt', 'dashboard']);
+// Instance name/path reserved-word validation: one shared set, imported (paths.js) so the panel
+// and the router can never drift apart again.
+const { INST_NAME_RE, RESERVED_PATHS } = require('./paths');
 //// hot-reload an instance's config (pool mode); throws on failure
 function hotReload(name) {
-  if (!POOL) return false;
-  POOL.reload(name);
+  if (!POOL) {
+    // Single-instance mode: the live config must pick up the keys written to disk
+    try {
+      const c = loadCfg(name);
+      const stateMod = require("./state");
+      if (c && stateMod.CUR_CFG && (stateMod.CUR_CFG._name || "default") === name) {
+        stateMod.CUR_CFG.apiKeys = c.apiKeys || [];
+
+        stateMod.CUR_CFG.adminExpireAt = c.adminExpireAt;
+        stateMod.CUR_CFG.adminAuth = c.adminAuth;
+        stateMod.CUR_CFG.webToken = c.webToken;
+        stateMod.CUR_CFG.requiredPlugins = c.requiredPlugins;
+        stateMod.CUR_CFG.plugins = c.plugins;
+        stateMod.CUR_CFG.channels = c.channels;
+        stateMod.CUR_CFG.proxies = c.proxies;
+        stateMod.CUR_CFG.serverInfo = c.serverInfo;
+        stateMod.CUR_CFG.layout = c.layout;
+      }
+    } catch (_) {}
+    return false;
+  }
+  try { POOL.reload(name); } catch (_) {}
   return true;
 }
+function syncKeysLive(name) {
+  // single-instance mode: the live cfg object serves traffic; key changes must apply in memory too
+  if (POOL) return;
+  try {
+    const stateMod = require("./state");
+    const live = stateMod.CUR_CFG;
+    if (live && (live._name || "default") === name) {
+      const disk = loadCfg(name);
+      if (disk) live.apiKeys = disk.apiKeys || [];
+    }
+  } catch (_) {}
+}
+
 function cfgFile(name) {
   return name === 'default' ? path.join(DATA(), 'config.json') : path.join(DATA(), `config.${name}.json`);
 }
@@ -146,13 +180,43 @@ if (crypt) { const pass = crypt.loadPass(); if (pass) text = crypt.encryptText(p
   try { fs.chmodSync(f, 0o600); } catch (_) {}
 _keyCache.delete(f); // salt changed; force re-derivation on next read (~51ms each)
 }
+/* Log tail (rewritten 2026-11-09): the panel used to readFileSync() the whole log and split it.
+ * gateway.log is append-only for the life of the process, so after a few weeks it reaches hundreds of
+ * MB -- one "logs" refresh then allocated Buffer + string + one string per line of that size and took
+ * the gateway down with it on a phone. Read a bounded window off the end instead: memory follows the
+ * window, not the file. */
+const LOG_MAX_LINES = 2000;         // hard cap on ?lines=; the panel only ever asks for 80..400
+const LOG_TAIL_WINDOW = 512 * 1024; // bytes read from the end at most
 function readLog(name, lines) {
 // Single-process mode: all instances share one gateway.log
   const f = path.join(MLOG(), POOL ? 'gateway.log' : `${name}.log`);
   if (!fs.existsSync(f)) return '(无日志)';
-  const txt = fs.readFileSync(f, 'utf8');
-  const arr = txt.split('\n');
-  return arr.slice(Math.max(0, arr.length - lines)).join('\n');
+  const want = Math.min(Math.max(1, parseInt(lines, 10) || 50), LOG_MAX_LINES);
+  let fd = -1;
+  try {
+    fd = fs.openSync(f, 'r');
+    const size = fs.fstatSync(fd).size;
+    // a log line averages well under 512 bytes; the window never grows with the file
+    const win = Math.max(0, Math.min(size, Math.max(8 * 1024, Math.min(LOG_TAIL_WINDOW, want * 512))));
+    const start = size - win;
+    const buf = Buffer.allocUnsafe(win);
+    let got = 0;
+    while (got < win) {
+      const n = fs.readSync(fd, buf, got, win - got, start + got);
+      if (n <= 0) break;
+      got += n;
+    }
+    let txt = buf.toString('utf8', 0, got);
+    // starting mid-file: drop the first (possibly half) line
+    if (start > 0) { const nl = txt.indexOf('\n'); txt = nl >= 0 ? txt.slice(nl + 1) : ''; }
+    const arr = txt.split('\n');
+    if (arr.length && arr[arr.length - 1] === '') arr.pop();
+    return arr.slice(Math.max(0, arr.length - want)).join('\n');
+  } catch (e) {
+    return '(读取日志失败: ' + e.message + ')';
+  } finally {
+    if (fd >= 0) { try { fs.closeSync(fd); } catch (_) {} }
+  }
 }
 function pidRunning(pid) {
   if (!pid) return false;
@@ -288,6 +352,15 @@ function checkAdminAuth(cfg, req, query, opts = {}) {
       } else if (ent && Number(ent.exp) > Date.now()) {
         if (!ent.panelSid || (panelState && ent.panelSid === panelState.sid)) { mainOk = true; break; }
       }
+    }
+  }
+
+  // ---- Admin API keys (apiKeys with role "admin"): accepted as Bearer / x-agw-token / ?key= ----
+  if (!mainOk) {
+    const adminTok = bearer || h['x-agw-token'] || (query && query.get('key')) || '';
+    if (adminTok) {
+      const adminKey = (cfg.apiKeys || []).find(k => k.key === adminTok && k.role === 'admin' && k.enable !== false);
+      if (adminKey) mainOk = true;
     }
   }
 
@@ -1239,7 +1312,7 @@ async function handleAdmin(cfg, req, res, u, p, bodyStr) {
     if (!c) return jsonRes(res, 404, { error: '实例不存在' });
     return jsonRes(res, 200, {
       name, port: (c.listen || {}).port || 16384, host: (c.listen || {}).host || '0.0.0.0',
-      gatewayKey: reveal ? (c.gatewayKey || '') : (c.gatewayKey ? '(已设)' : ''),
+
       webToken: reveal ? (c.webToken || '') : (c.webToken ? '(已设)' : ''),
       panel: { openBrowser: !(c.panel && c.panel.openBrowser === false) },
       tls: c.tls || { enable: false },
@@ -1265,7 +1338,7 @@ async function handleAdmin(cfg, req, res, u, p, bodyStr) {
 // Only some fields are editable; apiKey keeps its value (the client sends only a keyPrefix, never the secret)
     if (data.port != null) { c.listen = c.listen || {}; c.listen.port = Number(data.port); }
     if (data.host != null) { c.listen = c.listen || {}; c.listen.host = data.host; }
-    if (data.gatewayKey !== undefined) c.gatewayKey = data.gatewayKey;
+
     if (data.webToken !== undefined) {
       const nextToken = String(data.webToken || '');
       const oldToken = String(c.webToken || '');
@@ -1359,6 +1432,7 @@ async function handleAdmin(cfg, req, res, u, p, bodyStr) {
     const name = decodeURIComponent(api.slice('instance-create/'.length));
     if (!INST_NAME_RE.test(name)) return jsonRes(res, 400, { error: '实例名只能含字母/数字/中划线/下划线, 最长32字符' });
     if (RESERVED_PATHS.has(name) || name === 'example') return jsonRes(res, 400, { error: '实例名 ' + name + ' 是保留字(与 API 路径冲突), 请换一个' });
+    if (isEndpointHead(name)) return jsonRes(res, 400, { error: '实例名 ' + name + ' 与 API 端点首段同名(裸 /' + name + '/... 会被当作实例前缀, 该端点就走不到了), 请换一个' });
     if (name === 'default') return jsonRes(res, 400, { error: 'default 是主实例, 请直接编辑' });
     if (fs.existsSync(cfgFile(name))) return jsonRes(res, 409, { error: '实例 ' + name + ' 已存在' });
     let data;
@@ -1374,7 +1448,7 @@ async function handleAdmin(cfg, req, res, u, p, bodyStr) {
       listen: { port, host: data.host || '0.0.0.0' },
       tls,
       webToken: typeof data.webToken === 'string' ? data.webToken : '',
-      gatewayKey: '',
+
       channels: Array.isArray(data.channels) ? data.channels : [], proxies: {}, modelMap: {}, models: [],
       routing: { maxRetry: 2, timeoutSec: 120, cooldownSec: 30 },
     };
@@ -1553,7 +1627,7 @@ expireAt: c.adminExpireAt || 0,      // panel session expiry (agw admin expire)
     const out = { ok: true, secondKeySet: !!((c.adminAuth || {}).secondKey), totpEnabled: !!((c.adminAuth || {}).totpSecret) };
     if (newTotp) {
       out.totpSecret = newTotp;
-      out.otpauthUrl = 'otpauth://totp/ai-gateway-' + encodeURIComponent(name) + '?secret=' + newTotp + '&issuer=ai-gateway';
+      out.otpauthUrl = 'otpauth://totp/OpenAGW-' + encodeURIComponent(name) + '?secret=' + newTotp + '&issuer=OpenAGW';
     }
     return jsonRes(res, 200, out);
   }
@@ -1570,13 +1644,14 @@ expireAt: c.adminExpireAt || 0,      // panel session expiry (agw admin expire)
     if (live && Array.isArray(live.apiKeys)) for (const k of live.apiKeys) liveMap[k.key] = k.usedTokens || 0;
     const keys = (c.apiKeys || []).map(k => ({
       key: k.key, name: k.name || '', enable: k.enable !== false,
+      role: k.role === 'admin' ? 'admin' : 'user',
       quotaTokens: Number(k.quotaTokens) || 0,
       usedTokens: liveMap[k.key] !== undefined ? liveMap[k.key] : (Number(k.usedTokens) || 0),
       models: k.models || [], channels: k.channels || [], branches: k.branches || [],
       redact: k.redact == null ? null : !!k.redact,
       expiresAt: k.expiresAt || '', note: k.note || '', createdAt: k.createdAt || '',
     }));
-    return jsonRes(res, 200, { keys, gatewayKeySet: !!c.gatewayKey });
+    return jsonRes(res, 200, { keys });
   }
 
 // POST /admin/api/keys/:inst -- issue a card {name, quotaTokens, models, channels, expiresAt, note} -> returns the full key
@@ -1592,6 +1667,7 @@ expireAt: c.adminExpireAt || 0,      // panel session expiry (agw admin expire)
       key,
       name: String(data.name || '').trim().slice(0, 64),
       enable: true,
+      role: data.role === 'admin' ? 'admin' : 'user',
       quotaTokens: Math.max(0, Number(data.quotaTokens) || 0),
       usedTokens: 0,
       models: Array.isArray(data.models) ? data.models.map(s => String(s).trim()).filter(Boolean) : [],
@@ -1604,6 +1680,7 @@ expireAt: c.adminExpireAt || 0,      // panel session expiry (agw admin expire)
     c.apiKeys.push(nk);
     try { saveCfg(name, c); } catch (e) { return jsonRes(res, 500, { error: '保存失败: ' + e.message }); }
     if (POOL) { try { hotReload(name); } catch (_) {} }
+    syncKeysLive(name);
     return jsonRes(res, 200, { ok: true, key: nk });
   }
 
@@ -1616,6 +1693,7 @@ expireAt: c.adminExpireAt || 0,      // panel session expiry (agw admin expire)
     const k = (c.apiKeys || []).find(x => x.key === data.key);
     if (!k) return jsonRes(res, 404, { error: '卡密不存在' });
     if (data.enable !== undefined) k.enable = !!data.enable;
+    if (data.role === 'admin' || data.role === 'user') k.role = data.role;
     if (data.quotaTokens !== undefined) k.quotaTokens = Math.max(0, Number(data.quotaTokens) || 0);
     if (data.name !== undefined) k.name = String(data.name).trim().slice(0, 64);
     if (data.models !== undefined) k.models = Array.isArray(data.models) ? data.models.map(s => String(s).trim()).filter(Boolean) : [];
@@ -1631,6 +1709,7 @@ expireAt: c.adminExpireAt || 0,      // panel session expiry (agw admin expire)
     if (data.addQuota) { k.quotaTokens = (Number(k.quotaTokens) || 0) + Math.max(0, Number(data.addQuota) || 0); }
     try { saveCfg(name, c); } catch (e) { return jsonRes(res, 500, { error: '保存失败: ' + e.message }); }
     if (POOL) { try { hotReload(name); } catch (_) {} }
+    syncKeysLive(name);
     return jsonRes(res, 200, { ok: true, hotReload: !!POOL });
   }
 
@@ -1648,6 +1727,7 @@ expireAt: c.adminExpireAt || 0,      // panel session expiry (agw admin expire)
       if (c.apiKeys.length < before) {
         try { saveCfg(name, c); } catch (e) { return jsonRes(res, 500, { error: '保存失败: ' + e.message }); }
         if (POOL) { try { hotReload(name); } catch (_) {} }
+        syncKeysLive(name);
         return jsonRes(res, 200, { ok: true });
       }
       return jsonRes(res, 404, { error: '卡密不存在' });
@@ -1757,6 +1837,7 @@ expireAt: c.adminExpireAt || 0,      // panel session expiry (agw admin expire)
     if (name === 'default') return jsonRes(res, 400, { error: 'default 是主实例, 不能改名' });
     if (!INST_NAME_RE.test(newName)) return jsonRes(res, 400, { error: '新实例名只能含字母/数字/中划线/下划线, 最长32字符' });
     if (RESERVED_PATHS.has(newName)) return jsonRes(res, 400, { error: '「' + newName + '」是保留名(与 API 路径冲突), 不能用作实例名' });
+    if (isEndpointHead(newName)) return jsonRes(res, 400, { error: '「' + newName + '」与 API 端点首段同名(裸 /' + newName + '/... 会被当作实例前缀), 不能用作实例名' });
     if (newName === name) return jsonRes(res, 400, { error: '新旧名称相同' });
     if (!fs.existsSync(cfgFile(name))) return jsonRes(res, 404, { error: '实例不存在: ' + name });
     if (fs.existsSync(cfgFile(newName))) return jsonRes(res, 409, { error: '实例名已存在: ' + newName });
@@ -1877,7 +1958,7 @@ if (name === currentName(cfg)) continue; // kill ourselves last
     return;
   }
 
-// POST /admin/api/chat -- chat test (proxies to the target instance's /v1/chat/completions, injects gatewayKey automatically, streaming passes through)
+// POST /admin/api/chat -- chat test (proxies to the target instance's /v1/chat/completions, injects the first user card automatically, streaming passes through)
 // body may carry instance to pick the target (the panel's top-bar selection); default = this instance
   if (req.method === 'POST' && api === 'chat') {
     let target = cfg, bodyOut = bodyStr || '{}';
@@ -1894,7 +1975,8 @@ if (name === currentName(cfg)) continue; // kill ourselves last
     } catch (e) { return jsonRes(res, 500, { error: '读取目标实例配置失败: ' + e.message }); }
     let port = (target.listen || {}).port || 16384;
     let apiPath = '/v1/chat/completions';
-    const gwKey = target.gatewayKey || '';
+    // The panel chat test needs a user-side credential: use the first enabled user card.
+    const gwKey = ((target.apiKeys || []).find(k => k && k.role !== 'admin' && k.enable !== false) || {}).key || '';
 // Single-process mode: hit the main port's /<instance>/ prefix directly (old instance ports may no longer be open)
     if (POOL) {
       port = POOL.mainPort;
@@ -1939,6 +2021,7 @@ function dashOf(c) {
     version: VERSION, listen: c.listen,
     channels: (c.channels || []).map(ch => ({ name: ch.name, type: ch.type, models: (ch.models || []).length })),
     probe: Object.fromEntries(Object.entries(c._stats.probe || {}).map(([k, v]) => [k, { rate: v.total ? Math.round(v.ok / v.total * 100) : null, total: v.total, lastOk: v.lastOk, lastErr: v.lastErr }])),
+    breaker: Object.fromEntries(Object.entries(c._breakerState || {}).map(([k, v]) => [k, { broken: !!(v.until > Date.now()), until: v.until || 0, fails: (v.fails || []).length }])),
   };
 }
 
@@ -2233,7 +2316,7 @@ async function loadConfigEditor(){
   try{
     const c=await api('GET','config/'+curInst);
     let html='<div class="field row"><div class="f"><label>端口</label><input id="ed-port" type="number" value="'+c.port+'"></div>';
-    html+='<div class="f"><label>网关密码</label><input id="ed-gwkey" type="text" value="'+(c.gatewayKey||'')+'" placeholder="空=不校验"></div></div>';
+    html+='</div>';
     html+='<div class="field row"><div class="f"><label>访问令牌 (webToken)</label><input id="ed-webtoken" type="text" value="'+(c.webToken||'')+'" placeholder="'+(c.webToken?'(已设,留空不改)':'空=不启用 API 令牌')+'"></div></div>';
     html+='<div class="flex" style="margin:8px 0"><button class="btn sm" onclick="saveSettings()">💾 保存设置</button><button class="btn sm outline" onclick="doAction(&#39;'+curInst+'&#39;,&#39;restart&#39;)">⟳ 保存后重启</button></div>';
     html+='<hr style="border:0;border-top:1px solid var(--md-outline);margin:16px 0">';
@@ -2253,7 +2336,7 @@ async function loadConfigEditor(){
   }catch(e){document.getElementById('cfg-editor').innerHTML='<p style="color:var(--md-error)">'+e.message+'</p>'}
 }
 async function saveSettings(){
-  const data={port:Number(document.getElementById('ed-port').value),gatewayKey:document.getElementById('ed-gwkey').value};
+  const data={port:Number(document.getElementById('ed-port').value)};
   const ak=document.getElementById('ed-webtoken').value;
   if(ak&&!ak.includes('已设'))data.webToken=ak;
   try{await api('POST','config/'+curInst,data);toast('设置已保存, 建议重启生效')}

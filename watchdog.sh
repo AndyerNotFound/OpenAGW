@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ai-gateway watchdog -- detects a dead/unresponsive gateway and restarts it automatically
 # Incident 2026-10-10: after the gateway was killed at 18:32 its PID got reused; agw.sh misjudged it as "already running" and could not start.
-# Usage: setsid nohup bash ~/ai-gateway/watchdog.sh [interval secs, default 30] >/dev/null 2>&1 &
+# Usage: setsid nohup bash ~/OpenAGW/watchdog.sh [interval secs, default 30] >/dev/null 2>&1 &
 set -u
 DIR="$(cd "$(dirname "$0")" && pwd)"
 PIDFILE="$DIR/.run/main.pid"
