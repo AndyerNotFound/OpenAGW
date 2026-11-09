@@ -324,15 +324,29 @@ table.tbl{width:100%;table-layout:fixed;border-collapse:collapse;font-size:10px}
 md-filled-card{background:var(--md-sys-color-surface-container);border-radius:var(--md-sys-shape-corner-large);
   padding:14px;margin-bottom:4px;display:block}
 .list-gap{display:flex;flex-direction:column;gap:4px}
-/* Overview instance cards run as a horizontal carousel: one page = the fully visible cards
-   (3 on wide screens, 1 on phones); the ovCar* helpers in app.js advance one page per tick.
+/* Overview horizontal carousels (instance cards + stat boxes): one page = the fully visible items;
+   the ovCar* helpers in app.js advance one page per tick. Instance cards: 3 per page on wide
+   screens, 1 on phones (3 would squeeze below readability). Stat boxes: 3 per page on any screen.
    Scrollbar hidden on purpose — like .rail-list, touch/wheel scrolling still works. */
-#ov-inst-list{flex-direction:row;overflow-x:auto;overscroll-behavior-x:contain;
+.ov-car{display:flex;flex-direction:row;overflow-x:auto;overscroll-behavior-x:contain;
   scroll-snap-type:x mandatory;scroll-behavior:smooth;scrollbar-width:none;-ms-overflow-style:none}
-#ov-inst-list::-webkit-scrollbar{width:0;height:0}
-#ov-inst-list>*{flex:0 0 100%;scroll-snap-align:start;min-width:0}
-@media(min-width:601px){ #ov-inst-list>.card-item{flex-basis:calc((100% - 8px)/3)} }
-@media(prefers-reduced-motion:reduce){#ov-inst-list{scroll-behavior:auto}}
+.ov-car::-webkit-scrollbar{width:0;height:0}
+.ov-car>*{flex:0 0 100%;scroll-snap-align:start;min-width:0}
+.ov-car>.stat-box{flex-basis:calc((100% - 8px)/3)}
+@media(min-width:601px){ .ov-car>.card-item{flex-basis:calc((100% - 8px)/3)} }
+@media(prefers-reduced-motion:reduce){.ov-car{scroll-behavior:auto}}
+
+/* About card: gateway name (custom brand) + a one-glance summary */
+.about{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}
+.about .logo{width:34px;height:34px;border-radius:10px;background:var(--md-sys-color-primary-container);
+  color:var(--md-sys-color-on-primary-container);display:grid;place-items:center;flex:none}
+.about .logo .msym{font-size:18px}
+.about-txt{flex:none;min-width:0}
+.about-name{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.about-ver{font-size:10px;color:var(--md-sys-color-on-surface-variant);margin-top:1px}
+.about-lines{flex:1 1 220px;min-width:0;font-size:11px;color:var(--md-sys-color-on-surface-variant);
+  display:flex;flex-direction:column;gap:2px}
+.about-lines b{color:var(--md-sys-color-on-surface);font-variant-numeric:tabular-nums}
 
 /* ============ Card item: head (name) / body (details) / foot (actions) ============
    md-list-item put 3-4 action buttons in the end slot, so on a 400px phone the supporting text was

@@ -403,19 +403,20 @@ function cardItem({dot='', name='', tags='', state='', stateCls='', tail='', lin
 // 1 on phones) — and wraps to the start at the end. Paused while the pointer rests on the list
 // or the tab is hidden. OV_CAR_MS is the tick interval.
 const OV_CAR_MS = 4000;
+const OV_CAR_LISTS = ['#ov-inst-list','#ov-stat-list'];
 let ovCarTimer=null;
-function ovCarTick(){
-  const list=$('#ov-inst-list'); if(!list) return;
-  const card=list.querySelector('.card-item'); if(!card) return;
+function ovCarTickList(list){
+  const card=list.querySelector('.card-item,.stat-box'); if(!card) return;
   const gap=parseFloat(getComputedStyle(list).columnGap)||0;
   const w=card.getBoundingClientRect().width+gap; if(w<=0) return;
   const per=Math.max(1,Math.round(list.clientWidth/w));
-  const cards=list.querySelectorAll('.card-item').length;
-  if(cards<=per) return;
+  const items=list.children.length;
+  if(items<=per) return;
   const max=list.scrollWidth-list.clientWidth;
   const left=list.scrollLeft>=max-1 ? 0 : Math.min(list.scrollLeft+w*per, max);
   list.scrollTo({left});
 }
+function ovCarTick(){ OV_CAR_LISTS.forEach(sel=>{ const l=$(sel); if(l) ovCarTickList(l); }); }
 function ovCarStart(){ if(ovCarTimer) return; if(reducedMotion()) return;
   ovCarTimer=setInterval(()=>{ if(!document.hidden && !Store._ovHover) ovCarTick(); }, OV_CAR_MS); }
 function ovCarStop(){ if(ovCarTimer){ clearInterval(ovCarTimer); ovCarTimer=null; } }
@@ -456,6 +457,18 @@ async function renderOverview(){
     $('#ov-hitrate').textContent=inTok?((cached/inTok)*100).toFixed(1)+'%':'-';
     $('#ov-models').textContent=models.size||'-';
     $('#ov-uptime').textContent=fmtDur(maxUp);
+// About card: custom gateway name + one-glance summary from the data just gathered
+    {
+      const run=instances.filter(i=>i.running).length;
+      const an=$('#ov-about-name'), av=$('#ov-about-ver'), al=$('#ov-about-lines');
+      if(an) an.textContent=brandState.name;
+      if(av){ av.textContent=brandState.ver; av.style.display=brandState.ver?'':'none'; }
+      if(al) al.innerHTML=[
+        `运行中 <b>${run}</b> / ${instances.length} 个实例 · 共 <b>${instances.reduce((a,i)=>a+(i.chCount||0),0)}</b> 个渠道`,
+        `累计 <b>${fmtNum(req)}</b> 次请求 · 错误 <b>${fmtNum(err)}</b> · 使用模型 <b>${models.size}</b> 个`,
+        `最长运行 <b>${fmtDur(maxUp)}</b> · 当前管理实例 <b>${esc(Store.inst||'default')}</b>`,
+      ].map(l=>`<div>${l}</div>`).join('');
+    }
     const ovList=$('#ov-inst-list');
     const ovLeft=ovList.scrollLeft;  // keep the carousel position across the 5s refresh
     ovList.innerHTML=instances.map(i=>cardItem({
@@ -1871,8 +1884,8 @@ $('#lg-rec-server').addEventListener('focusout',saveRecCfg);
 $('#lg-rec-server').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.isComposing) saveRecCfg(); });
 $('#lg-refresh').addEventListener('click',renderLogs);
 $('#ov-log-refresh').addEventListener('click',renderOverview);
-$('#ov-inst-list').addEventListener('pointerenter',()=>{ Store._ovHover=true; });
-$('#ov-inst-list').addEventListener('pointerleave',()=>{ Store._ovHover=false; });
+OV_CAR_LISTS.forEach(sel=>$(sel)?.addEventListener('pointerenter',()=>{ Store._ovHover=true; }));
+OV_CAR_LISTS.forEach(sel=>$(sel)?.addEventListener('pointerleave',()=>{ Store._ovHover=false; }));
 $('#refreshBtn').addEventListener('click',()=>{ go(Store.page); });
 $('#refreshBtn').addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ go(Store.page); } });
 $('#topInst').addEventListener('change', e=>{ Store.inst=e.target.value; go(Store.page); });

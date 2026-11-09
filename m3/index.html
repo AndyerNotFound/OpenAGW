@@ -46,6 +46,18 @@
 
     <section id="page-overview" class="page">
       <md-filled-card>
+        <div class="card-head"><div><div class="card-title">简介</div><div class="card-sub">网关概况</div></div></div>
+        <div class="about">
+          <span class="logo" aria-hidden="true"><span class="msym">smart_toy</span></span>
+          <div class="about-txt">
+            <div class="about-name" id="ov-about-name">-</div>
+            <div class="about-ver" id="ov-about-ver"></div>
+          </div>
+          <div class="about-lines" id="ov-about-lines"><div>正在加载…</div></div>
+        </div>
+      </md-filled-card>
+
+      <md-filled-card>
         <div class="card-head"><div><div class="card-title">运行概览</div><div class="card-sub">实例与运行状态</div></div>
           <md-text-button data-goto="ports">管理端口</md-text-button></div>
         <div class="stat-row" role="region" aria-label="运行概览">
@@ -54,19 +66,17 @@
           <div class="stat-box"><div class="num" id="ov-channels">-</div><div class="lbl">渠道总数</div></div>
           <div class="stat-box"><div class="num" id="ov-uptime">-</div><div class="lbl">运行时长</div></div>
         </div>
-        <div id="ov-inst-list" class="list-gap"><md-linear-progress indeterminate></md-linear-progress></div>
+        <div id="ov-inst-list" class="list-gap ov-car"><md-linear-progress indeterminate></md-linear-progress></div>
       </md-filled-card>
 
       <md-filled-card>
         <div class="card-head"><div><div class="card-title">统计</div><div class="card-sub">全部实例累计用量</div></div>
           <md-text-button data-goto="stats">查看统计</md-text-button></div>
-        <div class="stat-row" role="region" aria-label="用量统计">
+        <div id="ov-stat-list" class="stat-row ov-car" role="region" aria-label="用量统计">
           <div class="stat-box"><div class="num" id="ov-requests">-</div><div class="lbl">请求总数</div></div>
           <div class="stat-box"><div class="num" id="ov-errors">-</div><div class="lbl">错误数</div></div>
           <div class="stat-box"><div class="num" id="ov-intok">-</div><div class="lbl">输入 Token</div></div>
           <div class="stat-box"><div class="num" id="ov-outtok">-</div><div class="lbl">输出 Token</div></div>
-        </div>
-        <div class="stat-row" role="region" aria-label="缓存与模型">
           <div class="stat-box"><div class="num" id="ov-cached">-</div><div class="lbl">缓存节省 Token</div></div>
           <div class="stat-box"><div class="num" id="ov-hitrate">-</div><div class="lbl">缓存命中率</div></div>
           <div class="stat-box"><div class="num" id="ov-models">-</div><div class="lbl">使用中模型</div></div>
