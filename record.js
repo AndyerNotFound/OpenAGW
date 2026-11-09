@@ -12,7 +12,7 @@ const { logErr, rpCompile, log, hdrName, utf8, safeParse, rpWalk, randId } = req
 const { makeDirectPipe } = require('./pipe');
 const { ResponsesStreamParser, UpstreamStreamParser, SSEDecoder, responsesRespToCanonical, makeResponsesWriter, makeWriter, canonicalToResponsesResp, canonicalToOpenAIResp, canonicalToClaudeResp, canonicalToGeminiResp, responsesToCanonical } = require('./convert');
 const { UP_RESP, TO_CANON, buildRequestForChannel, SAME_RETRYABLE, BUILD_BODY } = require('./sync');
-const { tokOf, sendError, corsHeaders, pickChannels, globMatch, forcedChannelName, analyzePrompt, calibRatio, calibUpdate, scaleDist } = require('./router');
+const { tokOf, sendError, corsHeaders, pickChannels, globMatch, forcedChannelName, analyzePrompt, calibRatio, calibUpdate, scaleDist, breakerFail, breakerReset } = require('./router');
 const { upstreamRequest, joinUrl } = require('./upstream');
 const { respRedactOn, wrapRedactWriter, redactText, redactDeep } = require('./redact');
 const { isConnErr, makeFreshAgents } = require('./proxy');
@@ -44,6 +44,27 @@ function writeRequestRecord(cfg, recCfg, rec) {
     fs.appendFileSync(f, line + '\n');
   } catch (e) { logErr('请求记录写入失败:', e.message); }
 }
+/* Bounded body collection for upstream *error* responses (2026-11-09). A relay that answers 5xx with
+ * a runaway HTML/JSON page used to be buffered whole just to pull 200-300 characters out of it, and on
+ * the pass-through paths the entire page sat in memory before res.end(). Keep the head, drop the rest:
+ * the message we log/forward never needed more. */
+const UP_ERR_BODY_MAX = 2 * 1024 * 1024;   // forward-through paths: far beyond any real error body
+const UP_ERR_TEXT_MAX = 8 * 1024;           // log-only paths: we only ever read 200-300 chars
+function capCollect(stream, cap) {
+  const st = { chunks: [], len: 0, truncated: false };
+  stream.on('data', (c) => {
+    if (st.truncated || !c) return;
+    const room = cap - st.len;
+    if (c.length > room) {
+      if (room > 0) { st.chunks.push(c.slice(0, room)); st.len = cap; }
+      st.truncated = true;
+      return;
+    }
+    st.chunks.push(c); st.len += c.length;
+  });
+  return st;
+}
+
 function postRequestRecord(server, line) {
   try {
     const u = new URL(server);
@@ -182,7 +203,9 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
         }
         __settle(upRes.statusCode);
       });
-      upRes.on('error', (e) => { try { res.end(); } catch (_) {} __settle(502, '上游中断(非流式): ' + e.message); });
+      // settle first: res.end() runs the recording wrapper, which snapshots recState.status. Ending
+      // before settling wrote a 499 ("client gone") over what is really a 502 (upstream broke).
+      upRes.on('error', (e) => { __settle(502, '上游中断(非流式): ' + e.message); try { res.end(); } catch (_) {} });
     }
 /* SSE streams keep the event-level forwarding pipe (framing, tolerant decode, [DONE]). */
     if (rewritePipe) {
@@ -285,7 +308,7 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
     };
     upRes.on('end', upStreamFinal);
     upRes.on('close', upStreamFinal);                         // ★上游断流(连接重置, 没发 end)也强制收尾
-    upRes.on('error', (e) => { logErr('upstream stream error:', e.message); try { res.end(); } catch (_) {} __settle(502, '上游流中断(转换): ' + e.message); });
+    upRes.on('error', (e) => { logErr('upstream stream error:', e.message); __settle(502, '上游流中断(转换): ' + e.message); try { res.end(); } catch (_) {} });
   } else {
     const chunks = [];
     upRes.on('data', c => chunks.push(c));
@@ -297,6 +320,7 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
         const why = 'upstream returned non-JSON: ' + redactText(txt.slice(0, 200), cfg.redact && cfg.redact.extra);
         if (retryHook && retryHook(why)) return;
         stats.errors++;
+        __settle(502, why);
         return sendError(clientFormat, res, 502, why);
       }
       const cresp = isResponsesUp ? responsesRespToCanonical(j) : UP_RESP[ch.type](j);
@@ -348,7 +372,7 @@ if (respRedactOn(cfg, urlInfo)) {   // response-direction filter (non-streaming)
       } catch (e) { logErr('[resp] 响应头下发失败:', e.message); try { res.destroy(); } catch (_) {} }
       __settle(200);
     });
-    upRes.on('error', (e) => { try { res.end(); } catch (_) {} __settle(502, '上游中断(转换/非流式): ' + e.message); });
+    upRes.on('error', (e) => { __settle(502, '上游中断(转换/非流式): ' + e.message); try { res.end(); } catch (_) {} });
   }
 }
 
@@ -389,7 +413,11 @@ if (urlInfo.stream) canonical.stream = true; // gemini: the streaming flag lives
 // Card-level privacy overrides are applied earlier (inside redactDeep, ~line 2250); not repeated here
 
 
-  const candidates = pickChannels(cfg, canonical.model, urlInfo.forceChannel || forcedChannelName(cfg, req));
+// Sticky channel preference (prompt-cache affinity): the same key+model keeps going to the
+// last channel that succeeded; a failure falls through to the round-robin order as before.
+  const stickyKey = (urlInfo.userKey ? (urlInfo.userKey.key || urlInfo.userKey.name || 'anon') : 'anon') + '|' + canonical.model;
+  const preferChannel = (cfg._lastChan && cfg._lastChan[stickyKey]) || '';
+  const candidates = pickChannels(cfg, canonical.model, urlInfo.forceChannel || forcedChannelName(cfg, req), preferChannel);
   if (!candidates.length) return sendError(clientFormat, res, 503, 'no channel configured in config.json');
 
   stats.requests++;
@@ -400,8 +428,14 @@ if (urlInfo.stream) canonical.stream = true; // gemini: the streaming flag lives
   for (const [k, t] of stats._inflight) if (Date.now() - t > 120000) stats._inflight.delete(k);
   stats._inflight.set(reqId, Date.now());
   const recCfg = (cfg.record && cfg.record.enable) ? cfg.record : null;
-  const recState = { status: 0, chName: '' };
-  let recChunks = null, recFinalized = false;
+  const recState = { status: 0, chName: '', clientGone: false };
+/* Request-record body buffer (rewritten 2026-11-09): the old code pushed every chunk written to the
+ * client into recChunks and only cut it down to maxChars inside finalizeRecord -- a long streamed
+ * answer (or a few concurrent ones) therefore held the entire response in memory, and nothing
+ * bounded it but the client's patience. Collect incrementally and stop at the cap: same record,
+ * bounded memory. */
+  const recMaxChars = (recCfg && recCfg.maxChars > 0) ? recCfg.maxChars : 200000;
+  let recText = '', recDec = utf8(), recTruncated = false, recFinalized = false;
   const recordReq = (status, chName, inT, outT) => {
     recState.status = status; recState.chName = chName || '';
     stats.recent.push({ id: reqId, time: new Date().toISOString().slice(0, 19).replace('T', ' '), model: canonical.model, channel: chName || '', status, duration: Date.now() - t0, inputTokens: inT || 0, outputTokens: outT || 0, keyName: urlInfo.userKey ? (urlInfo.userKey.name || (urlInfo.userKey.key || '').slice(0, 12)) : undefined });
@@ -423,28 +457,52 @@ const respDist = { reasoning: 0, text: 0, tool: 0 }; // response-side distributi
   function finalizeRecord() {
     if (!recCfg || recFinalized) return; recFinalized = true;
     try {
-      const maxC = (recCfg.maxChars > 0 ? recCfg.maxChars : 200000);
-      let resp = Buffer.concat(recChunks).toString('utf8');
-      if (resp.length > maxC) resp = resp.slice(0, maxC) + '\n…[截断]';
+      const maxC = recMaxChars;
+      let resp = recText;
+      if (recTruncated || resp.length > maxC) resp = resp.slice(0, maxC) + '\n…[截断]';
       let reqTxt = ''; try { reqTxt = JSON.stringify(body); } catch (_) {}
       if (reqTxt.length > maxC) reqTxt = reqTxt.slice(0, maxC) + '…[截断]';
       writeRequestRecord(cfg, recCfg, {
         id: reqId, time: new Date().toISOString(), instance: instName(cfg), format: clientFormat,
-        model: canonical.model, channel: recState.chName, status: recState.status,
+        model: canonical.model, channel: recState.chName,
+        // no settle wrote a status (the writer ended the response itself): 200 unless the client
+        // vanished, in which case 499
+        status: recState.status || (recState.clientGone ? 499 : 200),
         duration: Date.now() - t0, inputTokens: usageCapture.input || 0, outputTokens: usageCapture.output || 0,
         request: safeParse(reqTxt) || reqTxt, response: resp,
       });
     } catch (_) {}
   }
   if (recCfg) {
-    recChunks = [];
+    const recCap = recMaxChars + 1024;   // slack so the final slice lands on the exact cap
+    const collect = (c) => {
+      if (!c || recTruncated) return;
+      try {
+        recText += recDec(Buffer.isBuffer(c) ? c : Buffer.from(String(c)));
+        if (recText.length > recCap) { recText = recText.slice(0, recCap); recTruncated = true; }
+      } catch (_) {}
+    };
     const ow = res.write.bind(res), oe = res.end.bind(res);
-    res.write = (c, ...a) => { try { if (c) recChunks.push(Buffer.isBuffer(c) ? c : Buffer.from(String(c))); } catch (_) {} return ow(c, ...a); };
+    res.write = (c, ...a) => { collect(c); return ow(c, ...a); };
     res.end = (c, ...a) => {
-      try { if (c && typeof c !== 'function') recChunks.push(Buffer.isBuffer(c) ? c : Buffer.from(String(c))); } catch (_) {}
-      finalizeRecord();
+      if (typeof c !== 'function') collect(c);
+      // deferred: some paths call res.end() and only then __settle(status); recording synchronously
+      // here snapshotted status 0 and wrote a misleading 499 over a 200/502 (cross-format converts
+      // were the visible case)
+      setImmediate(() => { try { finalizeRecord(); } catch (_) {} });
       return oe(c, ...a);
     };
+/* A client that disconnects (stop button / dropped network) never reaches res.end -- flush the
+ * record on close so the request is not silently dropped; recFinalized keeps this idempotent. */
+    // setImmediate: the close handlers registered on res inside handleUpstreamResponse (killUp ->
+    // settle -> recordReq) run first and set recState.status, so the record is written with the real
+    // status instead of the initial 0.
+    res.on('close', () => {
+      // writableEnded tells "we finished the response" from "the client vanished"; finalizeRecord
+      // needs it to pick 200 vs 499 when no settle wrote a status
+      recState.clientGone = !res.writableEnded;
+      setImmediate(() => { try { finalizeRecord(); } catch (_) {} });
+    });
   }
   let attempt = 0;
   let lastErrStatus = 0;
@@ -480,6 +538,14 @@ const respDist = { reasoning: 0, text: 0, tool: 0 }; // response-side distributi
         try { if (stats._inflight) stats._inflight.delete(reqId); } catch (_) {}
         log(ctx.logMeta, 'status=' + status, 'in=' + usageCapture.input, 'out=' + usageCapture.output,
           'ttfb=' + (firstWriteAt ? firstWriteAt - t0 : 0), 'ms=' + (Date.now() - t0));
+        // Sticky channel preference: remember the channel that served this key+model successfully.
+        // Only the winning attempt settles through logDone; failures never pollute the memory.
+        if (status < 400 && ch && ch.name) {
+          if (!cfg._lastChan) cfg._lastChan = {};
+          cfg._lastChan[stickyKey] = ch.name;
+          if (Object.keys(cfg._lastChan).length > 512) cfg._lastChan = {};
+          breakerReset(cfg, ch.name);
+        }
         stats.byChannel[ch.name] = stats.byChannel[ch.name] || { requests: 0, inputTokens: 0, outputTokens: 0 };
         stats.byChannel[ch.name].inputTokens += usageCapture.input;
         stats.byChannel[ch.name].outputTokens += usageCapture.output;
@@ -555,6 +621,7 @@ const __pd = scaleDist(__raw.dist, __raw.total, usageCapture.input); // normaliz
     };
     const doSend = (fresh) => upstreamRequest(cfg, ch, built.url, built.headers, built.bodyBuf, (err, upRes, upReq) => {
       if (err) {
+        breakerFail(cfg, ch.name);
         lastErrStatus = 502; lastErrMsg = 'upstream request failed: ' + err.message;
         if (isConnErr(err)) {
           if (retrySameOrNext(err.message)) return;
@@ -570,11 +637,11 @@ const __pd = scaleDist(__raw.dist, __raw.total, usageCapture.input); // normaliz
 // Upstream fakes success with an HTML page (CDN challenge / relay failure page): treated as retryable; retry the same channel first, then switch
       const upCt = String(upRes.headers['content-type'] || '');
       if (upRes.statusCode < 400 && /text\/html/i.test(upCt)) {
-        const chunks = [];
-        upRes.on('data', c => chunks.push(c));
+        breakerFail(cfg, ch.name);
+        const body = capCollect(upRes, UP_ERR_TEXT_MAX);
         upRes.on('end', () => {
           lastErrStatus = 502;
-          lastErrMsg = '渠道 ' + ch.name + ' 返回了 HTML 网页而非数据(content-type: ' + upCt + '): ' + redactText(Buffer.concat(chunks).toString('utf8'), cfg.redact && cfg.redact.extra).slice(0, 200);
+          lastErrMsg = '渠道 ' + ch.name + ' 返回了 HTML 网页而非数据(content-type: ' + upCt + '): ' + redactText(Buffer.concat(body.chunks).toString('utf8'), cfg.redact && cfg.redact.extra).slice(0, 200);
           if (retrySameOrNext('upstream returned HTML (content-type: ' + upCt + ')')) return;
           stats.errors++;
           recordReq(502, ch.name, 0, 0);
@@ -591,14 +658,14 @@ const __pd = scaleDist(__raw.dist, __raw.total, usageCapture.input); // normaliz
 
       if (upRes.statusCode >= 400 && SAME_RETRYABLE.has(upRes.statusCode)
           && (sameLeft > 0 || attempt < candidates.length)) {
+        breakerFail(cfg, ch.name);
 // 429/5xx: backoff-retry on the same channel -> switch to the next candidate after the budget; other retryable errors switch immediately as before
         const sc = upRes.statusCode;
         const ra = parseInt(String(upRes.headers['retry-after'] || ''), 10);
-        const chunks = [];
-        upRes.on('data', c => chunks.push(c));
+        const body = capCollect(upRes, UP_ERR_TEXT_MAX);
         upRes.on('end', () => {
           lastErrStatus = sc;
-          lastErrMsg = `渠道 ${ch.name} 返回 ${sc}: ` + redactText(Buffer.concat(chunks).toString('utf8'), cfg.redact && cfg.redact.extra).slice(0, 300);
+          lastErrMsg = `渠道 ${ch.name} 返回 ${sc}: ` + redactText(Buffer.concat(body.chunks).toString('utf8'), cfg.redact && cfg.redact.extra).slice(0, 300);
           if (sameLeft > 0) {
             sameLeft--;
             const wait = Math.min(15000, (!isNaN(ra) && ra > 0) ? ra * 1000 : 400 * Math.pow(2, maxSame - sameLeft - 1));
@@ -640,15 +707,14 @@ upRes.resume(); // discard the original 404/405 body
             }
             if (upRes2.statusCode >= 400) {
 // chat failed too (not a 404/405 passthrough; this was already a conversion path) -> pass through chat's error
-              const c2 = [];
-              upRes2.on('data', c => c2.push(c));
+              const b2 = capCollect(upRes2, UP_ERR_BODY_MAX);
               upRes2.on('end', () => {
                 stats.errors++;
                 recordReq(upRes2.statusCode, ch.name, 0, 0);
                 log('UPERR', ctx.logMeta, 'status=' + upRes2.statusCode, '(downgrade chat 也失败)');
                 try {
-                  res.writeHead(upRes2.statusCode, { 'Content-Type': upRes2.headers['content-type'] || 'application/json', 'X-AI-Gateway-Channel': hdrName(ch.name), ...corsHeaders() });
-                  res.end(Buffer.concat(c2));
+                  res.writeHead(upRes2.statusCode, { 'Content-Type': upRes2.headers['content-type'] || 'application/json', 'X-AI-Gateway-Channel': hdrName(ch.name), ...(b2.truncated ? { 'X-AI-Gateway-Truncated': '1' } : {}), ...corsHeaders() });
+                  res.end(Buffer.concat(b2.chunks));
                 } catch (e) { logErr('[resp] 错误透传响应头下发失败:', e.message); try { res.destroy(); } catch (_) {} }
               });
               upRes2.on('error', () => { try { res.end(); } catch (_) {} });
@@ -663,16 +729,16 @@ upRes.resume(); // discard the original 404/405 body
       }
 
       if (upRes.statusCode >= 400) {
+        breakerFail(cfg, ch.name);
 // Non-retryable error (e.g. 400) or last candidate -> pass the error through unchanged
-        const chunks = [];
-        upRes.on('data', c => chunks.push(c));
+        const body = capCollect(upRes, UP_ERR_BODY_MAX);
         upRes.on('end', () => {
           stats.errors++;
           recordReq(upRes.statusCode, ch.name, 0, 0);
           log('UPERR', ctx.logMeta, 'status=' + upRes.statusCode, attempt > 1 ? '(已尝试 ' + attempt + ' 个渠道)' : '');
           try {
-            res.writeHead(upRes.statusCode, { 'Content-Type': upRes.headers['content-type'] || 'application/json', 'X-AI-Gateway-Channel': hdrName(ch.name), ...corsHeaders() });
-            res.end(Buffer.concat(chunks));
+            res.writeHead(upRes.statusCode, { 'Content-Type': upRes.headers['content-type'] || 'application/json', 'X-AI-Gateway-Channel': hdrName(ch.name), ...(body.truncated ? { 'X-AI-Gateway-Truncated': '1' } : {}), ...corsHeaders() });
+            res.end(Buffer.concat(body.chunks));
           } catch (e) { logErr('[resp] 错误透传响应头下发失败:', e.message); try { res.destroy(); } catch (_) {} }
         });
         upRes.on('error', () => { try { res.end(); } catch (_) {} });

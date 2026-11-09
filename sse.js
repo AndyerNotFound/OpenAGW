@@ -13,6 +13,13 @@
  * tolerant fallback for back-to-back JSON events. */
 
 const { StringDecoder } = require('string_decoder');
+const { logErr } = require('./util');
+
+/* A single SSE line has no business being this long. Without a cap, an upstream that never sends a
+ * newline makes this.line grow until the process dies, and nothing downstream ever runs: no write
+ * happens, so backpressure never applies. 8 MB is far above any real frame (the largest common case
+ * is an inline image delta) -- past it the fragment is dropped and the parser starts a fresh line. */
+const MAX_SSE_LINE = 8 * 1024 * 1024;
 
 const COLON = 58;
 const LF = 10;
@@ -29,6 +36,7 @@ class SSEParser {
     this.started = false;
     this.ended = false;
     this.line = '';
+    this.dropping = false;
     this.pendingCR = false;
     this.fieldLines = [];
     this.dataLines = [];
@@ -65,6 +73,22 @@ class SSEParser {
 
   _feed(text) {
     if (!text) return;
+/* Still inside a line that was already dropped as runaway: swallow everything up to and including
+ * its newline. Without this, the fragment after the drop became a field line of its own and was
+ * forwarded to the client as one multi-megabyte junk event. */
+    if (this.dropping) {
+      // CR counts as a terminator too: an upstream that ends lines with bare CR would otherwise
+      // keep the parser silent forever
+      let end = -1;
+      for (let k = 0; k < text.length; k++) {
+        const cc = text.charCodeAt(k);
+        if (cc === LF || cc === CR) { end = k; break; }
+      }
+      if (end < 0) return;
+      this.dropping = false;
+      text = text.slice(end + 1);
+      if (!text) return;
+    }
     let i = 0;
     if (this.pendingCR) {
       this.pendingCR = false;
@@ -90,12 +114,42 @@ class SSEParser {
         }
       }
     }
-    if (start < text.length) this.line += text.slice(start);
+    if (start < text.length) {
+      this.line += text.slice(start);
+      if (this.line.length > MAX_SSE_LINE) this._dropRunawayLine();
+    }
+  }
+
+  _dropRunawayLine() {
+    const dropped = this.line.length;
+    this.dropping = true;
+    this.line = '';
+    this.dataLines = [];
+    this.fieldLines = [];
+    this.eventName = '';
+    this.eventId = null;
+    this.retry = null;
+    this.hasFields = false;
+    try { logErr('[sse] 单行超过 ' + Math.round(MAX_SSE_LINE / 1048576) + ' MB, 已丢弃 ' + dropped + ' 字节的残缺事件'); } catch (_) {}
   }
 
   _emitLine() {
     const line = this.line;
     this.line = '';
+    // a line that arrives whole but is still over the cap must behave like one that grew past it
+    // across chunks -- otherwise the outcome depends on TCP framing
+    if (line.length > MAX_SSE_LINE) {
+      // clear the same state _dropRunawayLine clears, so the outcome does not depend on how the
+      // line happened to be split across chunks
+      this.dataLines = [];
+      this.fieldLines = [];
+      this.eventName = '';
+      this.eventId = null;
+      this.retry = null;
+      this.hasFields = false;
+      try { logErr('[sse] 单行超过 ' + Math.round(MAX_SSE_LINE / 1048576) + ' MB, 已丢弃 ' + line.length + ' 字节'); } catch (_) {}
+      return;
+    }
     if (line === '') { this._dispatch(); return; }
     if (line.charCodeAt(0) === COLON) {
       if (this.onComment) { try { this.onComment(line + '\n'); } catch (_) {} }

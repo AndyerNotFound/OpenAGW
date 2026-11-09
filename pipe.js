@@ -2,6 +2,10 @@
 const { utf8, safeParse, rpApplyText, rpWalk, logErr } = require('./util');
 const { SSEParser, serializeEvent, isDoneEvent, jsonish } = require('./sse');
 
+/* Same cap as SSEParser for the "line stream" case (upstream labelled text/plain or ndjson):
+ * without it buf grew with every chunk until the upstream stopped or the process died. */
+const MAX_LINE_STREAM = 8 * 1024 * 1024;
+
 /* ================= Response rewrite / forwarding pipe =================
  * One pipe for every response shape the gateway relays:
  *   - SSE streams: parsed event-by-event; only events that need a rewrite are
@@ -22,11 +26,20 @@ function makeDirectPipe(res, rpInc, isStream, opts) {
   let finished = false;
   let sawDone = false;
   let lastWriteOk = true;
+  let droppingLine = false;   // inside a line-stream line that was already discarded as runaway
+/* Backpressure signal must describe *this* push, not the last write ever made (2026-11-09).
+ * push() used to return lastWriteOk unconditionally. When a chunk carried no complete event/line
+ * (a split cell of an SSE frame), no write happened, so the stale "false" from the previous chunk
+ * made the caller pause the upstream -- with no write pending, res never emitted 'drain', and the
+ * stream hung until the upstream timeout. That is exactly what a 3 MB test stream did: 382 KB,
+ * pause, 180 s of silence, aborted. */
+  let wroteSincePush = false;
   let lastEventName = '';
   let lastEventId = null;
 
   const write = (s) => {
     if (finished || !s) return true;
+    wroteSincePush = true;
     try { lastWriteOk = res.write(s); } catch (_) { finished = true; lastWriteOk = true; }
     return lastWriteOk;
   };
@@ -103,21 +116,40 @@ function makeDirectPipe(res, rpInc, isStream, opts) {
   return {
     push(c) {
       if (finished) return true;
+      wroteSincePush = false;
       try {
         if (!isStream) { buf += u8(c); return true; }
         if (!isSSE) {
           buf += u8(c);
+          // Mirror SSEParser's dropping state: without it the fragment after a discarded runaway
+          // line was forwarded as a fresh multi-megabyte line.
+          if (droppingLine) {
+            const nl = buf.indexOf('\n');
+            if (nl < 0) { buf = ''; return true; }
+            buf = buf.slice(nl + 1);
+            droppingLine = false;
+            if (!buf) return true;
+          }
           const lines = buf.split('\n');
           buf = lines.pop();
           for (const l of lines) {
+            if (l.length > MAX_LINE_STREAM) {
+              logErr('[pipe] 单行超过 ' + Math.round(MAX_LINE_STREAM / 1048576) + ' MB, 已丢弃 ' + l.length + ' 字节');
+              continue;
+            }
             const out = rpInc.length ? rpApplyText(l, rpInc) : l;
             if (/^\s*data:\s*\[DONE\]\s*$/.test(out)) sawDone = true;
             write(out + '\n');
           }
-          return lastWriteOk;
+          if (buf.length > MAX_LINE_STREAM) {
+            logErr('[pipe] 单行超过 ' + Math.round(MAX_LINE_STREAM / 1048576) + ' MB, 已丢弃 ' + buf.length + ' 字节');
+            buf = '';
+            droppingLine = true;
+          }
+          return wroteSincePush ? lastWriteOk : true;
         }
         parser.push(c);
-        return lastWriteOk;
+        return wroteSincePush ? lastWriteOk : true;
       } catch (e) { logErr('[sse] 流式改写失败:', e.message); return true; }
     },
     end() {

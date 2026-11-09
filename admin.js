@@ -197,7 +197,8 @@ function readLog(name, lines) {
     fd = fs.openSync(f, 'r');
     const size = fs.fstatSync(fd).size;
     // a log line averages well under 512 bytes; the window never grows with the file
-    const win = Math.max(0, Math.min(size, Math.max(8 * 1024, Math.min(LOG_TAIL_WINDOW, want * 512))));
+    // 64 KB floor: one abnormal stack-trace/JSON line must not fall outside a tiny window
+    const win = Math.max(0, Math.min(size, Math.max(64 * 1024, Math.min(LOG_TAIL_WINDOW, want * 512))));
     const start = size - win;
     const buf = Buffer.allocUnsafe(win);
     let got = 0;
@@ -208,7 +209,9 @@ function readLog(name, lines) {
     }
     let txt = buf.toString('utf8', 0, got);
     // starting mid-file: drop the first (possibly half) line
-    if (start > 0) { const nl = txt.indexOf('\n'); txt = nl >= 0 ? txt.slice(nl + 1) : ''; }
+    // starting mid-file: drop the first (possibly half) line; a window that is entirely one
+    // over-long line has no newline to cut at, so keep it rather than returning nothing
+    if (start > 0) { const nl = txt.indexOf('\n'); txt = nl >= 0 ? txt.slice(nl + 1) : txt; }
     const arr = txt.split('\n');
     if (arr.length && arr[arr.length - 1] === '') arr.pop();
     return arr.slice(Math.max(0, arr.length - want)).join('\n');

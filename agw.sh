@@ -87,6 +87,40 @@ list_instances() {
   done
 }
 
+# Log rotation (added 2026-11-09): gateway.log is opened with >> for the whole life of the process, so a
+# phone left running for weeks grew it without bound -- and every "agw logs" / panel refresh then had to
+# walk a file that size. Rotate once, cold-start only: at this point no process holds the file open, so
+# rewriting it is safe (renaming a live fd would keep writing the old inode and free nothing).
+LOG_MAX_BYTES=8388608      # 8 MiB
+LOG_KEEP_BYTES=2097152     # keep the newest 2 MiB
+rotate_log() {
+  local f="${1:-}"
+  [ -n "$f" ] && [ -f "$f" ] || return 0
+  local sz
+  sz="$(stat -c %s "$f" 2>/dev/null || echo 0)"
+  case "$sz" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$sz" -gt "$LOG_MAX_BYTES" ] || return 0
+  local tmp
+  tmp="$(mktemp "$f.rot.XXXXXX" 2>/dev/null)" || return 0
+  # tail must be checked on its own: piping into sed hides a failed/short tail behind sed's exit
+  # status, and a failed tail would then replace the log with an empty file.
+  if tail -c "$LOG_KEEP_BYTES" "$f" > "$tmp" 2>/dev/null && [ -s "$tmp" ]; then
+    # always drop the first line: at worst the window starts exactly on a boundary and one complete
+    # line is lost, which is cheaper than telling the cases apart from tail bytes alone. If the whole
+    # window is a single line, keep it instead of ending up with a zero-byte log.
+    sed '1d' "$tmp" > "$tmp.cut" 2>/dev/null && [ -s "$tmp.cut" ] && mv "$tmp.cut" "$tmp"
+    rm -f "$tmp.cut"
+    # mktemp creates 600; keep the log's original mode (644 if stat cannot tell) so other readers
+    # (containers, other uids) do not lose access
+    local mode=""
+    mode="$(stat -c %a "$f" 2>/dev/null)"
+    chmod "${mode:-644}" "$tmp" 2>/dev/null
+    mv "$tmp" "$f" || rm -f "$tmp"
+  else
+    rm -f "$tmp"
+  fi
+}
+
 start_gw() {
   if is_running; then
     echo "• Gateway already running (pid $(cat "$PIDFILE"), main port $(get_main_port))"
@@ -96,7 +130,12 @@ start_gw() {
 # Clean up orphan processes of this dir only (other installs keep running)
   local op
   for op in $(gw_pids); do kill "$op" 2>/dev/null; done
+  # wait for them to actually exit before rotating: a dying process still holds the old fd, and a
+  # swap under it would send its last lines to an unlinked inode
+  local w=0
+  while [ "$w" -lt 10 ] && [ -n "$(gw_pids)" ]; do sleep 0.1; w=$((w+1)); done
   if [ ! -f "$DATA/config.json" ]; then echo "✗ Main config not found: $DATA/config.json"; return 1; fi
+  rotate_log "$LOGFILE"
   AGW_HOT="$AGW_HOT" nohup node "$DIR/gateway.js" >> "$LOGFILE" 2>&1 &
   echo $! > "$PIDFILE"
 # Wait for the process to come up + poll /health (loading takes seconds with many instances)
@@ -190,6 +229,15 @@ case "${1:-}" in
   status)       status_gw ;;
   list)         list_instances ;;
   logs)         tail -n "${2:-50}" "$LOGFILE" ;;
+  __rotate)
+    # Running this while the gateway is alive would move the file out from under its >> fd: writes
+    # keep landing on the old inode, the panel stops seeing new lines until a restart, and nothing
+    # frees the space. Refuse instead of producing a silent blackout.
+    if is_running || [ -n "$(gw_pids)" ]; then
+      echo "✗ gateway 正在运行, 拒绝轮转 (运行中轮转会让日志写进已被替换的 inode; 停服后 start 时会自动轮转)"
+      exit 1
+    fi
+    rotate_log "$LOGFILE" ;;
   show)         show_config ;;
   config)       shift; node "$DIR/cfg-cli.js" "$@" ;;
   *)

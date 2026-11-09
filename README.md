@@ -21,7 +21,7 @@ Gemini ──┘    convert ⇄ redact       └──▶  Claude official
 
 ## Proven, not promised
 
-- **27 test suites · 740 assertions — all green.** Every suite is standalone: `node test/<name>_test.js`, no install, no build step.
+- **31 test suites · 788 assertions — all green.** Every suite is standalone: `node test/<name>_test.js`, no install, no build step.
 - The full converter matrix (all 9 dialect pairs, streaming and not) plus proxy / auth / failover E2E pass in the maintainer's sandbox — **215/215**.
 - Nothing to download for the gateway itself — the whole project is plain Node.js, so the test suite doubles as your smoke test.
 
@@ -201,6 +201,7 @@ Every suite runs anywhere — no npm install, no build step:
 | `test/hot_pool_test.js` | 7 | hot restart across instance ports |
 | `test/hot_restart_test.js` | 9 | worker swap with an in-flight SSE stream |
 | `test/key_roles_test.js` | 23 | one-key-one-role card semantics |
+| `test/log_memory_test.js` | 13 | log tail read is bounded by a window, not by file size; rotation keeps a sane size |
 | `test/mixed_modelmap_test.js` | 3 | modelMap + models list on one channel |
 | `test/modelref_test.js` | 20 | composite `instance:channel:model` routing |
 | `test/no_multiuser_test.js` | 20 | single-tenant behavior (accounts removed, card keys kept) |
@@ -212,8 +213,11 @@ Every suite runs anywhere — no npm install, no build step:
 | `test/plugins_e2e_test.js` | 23 | plugins over real HTTP |
 | `test/plugins_migrated_test.js` | 18 | migrated balance / probe / legacy-import plugins |
 | `test/random_route_test.js` | 4 | opt-in random routing (order-based, not a 7%-flaky split check) |
+| `test/record_memory_test.js` | 20 | request-record buffer stops at maxChars; upstream error bodies are capped |
 | `test/redact_test.js` | 40 | redaction cases |
 | `test/session_persist_test.js` | 6 | panel session persistence |
+| `test/sse_backpressure_test.js` | 4 | a long SSE stream survives write backpressure (regression: 382 KB then silence) |
+| `test/sse_line_cap_test.js` | 11 | a newline-free SSE line cannot grow without bound |
 | `test/sse_convert_test.js` | 16 | cross-format SSE + response redaction across fragments |
 | `test/sse_stream_test.js` | 39 | one-byte SSE fragments, CRLF/CR, EOF, whitespace-only deltas |
 | `test/stats_all_test.js` | 8 | aggregate instance / model / channel stats |
@@ -222,7 +226,7 @@ Every suite runs anywhere — no npm install, no build step:
 | `test/tls_single_entry_test.js` | 7 | TLS single entry — never a plaintext twin |
 | `test/utf8_split_test.js` | 4 | chunk-split decoding |
 
-**740 assertions, 0 failures** — measured on Node `v24.18.0` (Termux). The full converter matrix (all 9 dialect pairs, streaming and not) and proxy / auth / failover E2E run in the maintainer's sandbox — 215/215.
+**788 assertions, 0 failures** — measured on Node `v24.18.0` (Termux). The full converter matrix (all 9 dialect pairs, streaming and not) and proxy / auth / failover E2E run in the maintainer's sandbox — 215/215.
 
 ## License
 
