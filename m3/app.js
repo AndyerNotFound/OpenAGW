@@ -407,7 +407,7 @@ function cardItem({dot='', name='', tags='', state='', stateCls='', tail='', lin
 // 1 on phones) — and wraps to the start at the end. Paused while the pointer rests on the list
 // or the tab is hidden. OV_CAR_MS is the tick interval.
 const OV_CAR_MS = 4000;
-const OV_CAR_LISTS = ['#ov-inst-list','#ov-stat-list','#ov-model-list'];
+const OV_CAR_LISTS = ['#ov-inst-list','#ov-stat-list','#ov-model-list','#ov-ann-list'];
 let ovCarTimer=null;
 function ovCarTickList(list){
   const card=list.querySelector('.card-item,.stat-box'); if(!card) return;
@@ -520,11 +520,16 @@ async function renderOverview(){
         ml.scrollLeft=Math.min(mLeft, ml.scrollWidth-ml.clientWidth);
       }
     }catch(e){ if(e.name!=='AbortError' && !$('#ov-model-list .model-page')) $('#ov-model-list').innerHTML='<div class="empty">模型列表读取失败: '+esc(e.message)+'</div>'; }
-// Announcement preview: latest 3, non-fatal on failure
+// Announcement carousel: latest 5, one page each, non-fatal on failure
     try{
       const d=await adapter.getAnnouncements(signal);
       const al=$('#ov-ann-list');
-      if(al) al.innerHTML=(d.items||[]).slice(0,3).map(anMini).join('')||'<div class="empty">暂无公告</div>';
+      if(al){
+        const aLeft=al.scrollLeft;  // keep the carousel position across the 5s refresh
+        al.innerHTML=(d.items||[]).slice(0,5).map(anPage).join('')||'<div class="empty">暂无公告</div>';
+        anFoldInit(al);
+        al.scrollLeft=Math.min(aLeft, al.scrollWidth-al.clientWidth);
+      }
     }catch(_){}
   }catch(e){ if(e.name!=='AbortError'){ console.error(e); snack(e.message,true); } }
   finally{ ovDisarm(); Store._ovBusy=false; }
@@ -541,9 +546,30 @@ function anCard(a){
          `<button class="pbtn pbtn-text" data-action="anDel" data-name="${a.id}">删除</button>`,
   });
 }
-function anMini(a){  // compact card for the home column: title + time + first body line
-  const first=String(a.body||'').split('\n').filter(Boolean)[0]||'';
-  return cardItem({name:a.title, state:fmtDateTime(a.at), lines:first?[first]:[]});
+// Home carousel: one page per announcement, latest 5 only (annOpen keeps 展开 state across the 5s refresh).
+const annOpen=new Set();
+function anPage(a){
+  const open=annOpen.has(a.id);
+  return `<div class="an-page" data-id="${a.id}">
+    <div class="an-page-head"><span class="an-title">${esc(a.title)}</span><span class="an-time">${fmtDateTime(a.at)}</span></div>
+    <div class="an-body${open?'':' fold'}">${esc(a.body||'(无内容)')}</div>
+    <button type="button" class="pbtn pbtn-text an-fold-btn" hidden></button>
+  </div>`;
+}
+// Show the fold button only when the 5-line clamp actually truncates (phones, long bodies).
+function anFoldInit(list){
+  list.querySelectorAll('.an-page').forEach(pg=>{
+    const body=pg.querySelector('.an-body'), btn=pg.querySelector('.an-fold-btn');
+    if(!body||!btn) return;
+    if(!body.classList.contains('fold')) return;  // expanded by user earlier
+    if(body.scrollHeight>body.clientHeight+2){ btn.hidden=false; btn.textContent='展开'; }
+    else body.classList.remove('fold');           // fits in 5 lines: no button
+    btn.addEventListener('click',()=>{
+      const id=pg.dataset.id;
+      if(body.classList.toggle('fold')){ annOpen.delete(id); btn.textContent='展开'; }
+      else { annOpen.add(id); btn.textContent='收起'; }
+    });
+  });
 }
 async function renderAnnounce(){
   const list=$('#an-list'); if(!list) return;
@@ -555,16 +581,26 @@ async function renderAnnounce(){
     if(e.name!=='AbortError') list.innerHTML='<div class="empty">读取失败: '+esc(e.message)+'</div>';
   }
 }
+function anLocalDT(ms){  // ms -> datetime-local string (local timezone)
+  const d=new Date(ms), p=n=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 function openAnnounceDialog(a){
   openDialog(a?'编辑公告':'发布公告', `<div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
     <md-outlined-text-field data-f="atitle" label="标题" value="${escAttr(a?a.title:'')}"></md-outlined-text-field>
     <md-outlined-text-field data-f="abody" label="内容(可换行)" type="textarea" rows="5" value="${escAttr(a?a.body||'':'')}"></md-outlined-text-field>
+    <md-outlined-text-field data-f="atime" label="发布时间(留空=现在)" type="datetime-local" value="${a&&a.at?anLocalDT(a.at):''}"></md-outlined-text-field>
   </div>`, {okText:a?'保存':'发布', onOk:async ()=>{
     const v=dlgValue();
     const title=String(v.atitle||'').trim();
     if(!title){ snack('标题不能为空',true); return false; }
+    let at;
+    if(String(v.atime||'').trim()){
+      at=new Date(String(v.atime).trim()).getTime();
+      if(!Number.isFinite(at)){ snack('发布时间格式无法识别',true); return false; }
+    }
     try{
-      await adapter.saveAnnouncement({id:a?a.id:undefined,title,body:String(v.abody||'')});
+      await adapter.saveAnnouncement({id:a?a.id:undefined,title,body:String(v.abody||''),at});
       snack(a?'公告已保存':'公告已发布');
       renderAnnounce();
       return true;

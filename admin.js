@@ -1076,13 +1076,22 @@ async function handleAdmin(cfg, req, res, u, p, bodyStr) {
       const title = String(j.title || '').trim();
       if (!title) return jsonRes(res, 400, { error: '标题不能为空' });
       const body = String(j.body || '').slice(0, 4000);
+      // publish time: {at} = ms epoch or a parseable datetime string; absent -> now (create) / unchanged (update)
+      const parseAt = (def) => {
+        if (j.at == null || j.at === '') return def;
+        const t = typeof j.at === 'number' ? j.at : Date.parse(String(j.at));
+        if (!Number.isFinite(t)) { jsonRes(res, 400, { error: '发布时间格式无法识别' }); return null; }
+        return t;
+      };
       const items = loadAnnouncements();
       if (j.id) {
         const it = items.find(a => a.id === String(j.id));
         if (!it) return jsonRes(res, 404, { error: '公告不存在' });
-        it.title = title; it.body = body; it.at = Date.now();
+        const at = parseAt(it.at); if (at === null) return;
+        it.title = title; it.body = body; it.at = at;
       } else {
-        items.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), title, body, at: Date.now() });
+        const at = parseAt(Date.now()); if (at === null) return;
+        items.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), title, body, at });
       }
       saveAnnouncements(items);
       return jsonRes(res, 200, { ok: true });
