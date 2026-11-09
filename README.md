@@ -167,31 +167,41 @@ An optional channel-level `path` pins **all** requests on that channel to one ex
 
 ### Parameter override (`paramOverride`)
 
-Parameters set in the gateway **beat the ones the SDK client sent** — they are not a fallback that only fills gaps. Two layers, channel-level wins over instance-level:
+Parameters set in the gateway **beat the ones the SDK client sent** — not a fallback that only fills gaps. Same request, different upstream body:
 
-```jsonc
-{
-  "paramOverride": { "temperature": 0.6 },            // instance default, every channel
-  "channels": [{
-    "name": "deepseek", "type": "openai",
-    "paramOverride": {
-      "temperature": 1,
-      "top_p": null,                                  // null = drop the parameter entirely
-      "stop": ["END"],                                // arrays are replaced whole
-      "metadata": { "from": "gateway" },              // objects merge key by key
-      "thinking": { "type": "enabled", "budget_tokens": 2048 }
-    }
-  }]
-}
+```bash
+# what the client (or the SDK) sends
+curl -s http://127.0.0.1:16384/v1/chat/completions \
+  -H 'Authorization: Bearer sk-...' \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"deepseek-chat","temperature":0.01,"top_p":0.99,"messages":[{"role":"user","content":"hi"}]}'
 ```
 
-- **Applied last.** The override is merged over the *final upstream body*, after dialect conversion, so it behaves identically on the byte-for-byte passthrough path and on a cross-format conversion — and it really overrides the client value (`temperature: 0.01` from the SDK is sent as `1`).
-- **Write keys in the channel dialect** — `openai` / `claude` / `gemini` shape, e.g. `max_tokens` for OpenAI and Claude, `generationConfig.maxOutputTokens` for Gemini. One channel, one dialect, no guessing. An instance-level override applies to every channel, so keep it to keys all of your upstreams understand (or set it per channel).
+Set the override with one cURL — `webToken` doubles as the API token for scripts (`x-agw-token`) — or in the panel (Routing → 参数覆写), or in `config.json`:
+
+```bash
+# AGW_TOKEN = this instance's webToken
+curl -s -X POST http://127.0.0.1:16384/admin/api/config/default \
+  -H "x-agw-token: $AGW_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"paramOverride":{"temperature":1,"top_p":1,"metadata":{"from":"gateway"}}}'
+```
+
+The identical client request now reaches the upstream like this (output measured on a throwaway instance with an echoing upstream):
+
+```json
+{"model":"deepseek-chat","temperature":1,"top_p":1,
+ "messages":[{"role":"user","content":"hi"}],"metadata":{"from":"gateway"}}
+```
+
+- **Two layers, channel wins.** Instance-level `paramOverride` covers every channel; a channel-level one lives in the channel dialog or in the channel object in `config.json` — the `/admin/api/channel/:inst` route replaces the whole channel, so it is not a one-line patch.
+- **Applied last.** Merged over the *final upstream body*, after dialect conversion, so it behaves identically on the byte-for-byte passthrough path and on a cross-format conversion — `temperature: 0.01` from the SDK really leaves as `1`.
+- **Write keys in the channel dialect** — `openai` / `claude` / `gemini` shape, e.g. `max_tokens` for OpenAI and Claude, `generationConfig.maxOutputTokens` for Gemini. An instance-level override hits every channel, so keep it to keys all of your upstreams understand.
 - **Merge rules** — objects merge key by key, arrays and scalars replace, `null` deletes the key.
 - **`model` and `stream` are off-limits.** The model comes from routing / `modelMap` / `models`, streaming from the client endpoint; an override on those two is ignored (logged once).
 - **Chat endpoints only** — `/v1/chat/completions`, `/v1/messages`, `/v1/responses` (and their instance-prefixed forms). Extended endpoints (`images`, `embeddings`, `audio`, …) still forward untouched.
 - **Config, not client data.** Override values are sent exactly as written; the privacy filter and `replace` rules apply to the incoming request, not to them.
-- Editable in the panel (Routing → 参数覆写 for the instance; the channel dialog for a channel) or straight in `config.json`; saving hot-reloads the instance.
+- Saving hot-reloads the instance; a single-process instance restarts onto the new config.
 
 Covered by `node test/param_override_test.js`.
 
