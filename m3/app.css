@@ -81,6 +81,12 @@ switched to following the page font, icons always use emoji glyphs, zero externa
   --md-sys-shape-corner-extra-large:13px;
   --md-sys-shape-corner-full:9999px;
 
+  /* === Spacing Token ===
+     One rhythm for the whole panel: the gap between sibling components (cards, rows, form fields,
+     dialog sections) is 8px. Before this token the same spacing was written as 4px in some places and
+     8px in others, so a page could show two different rhythms at once. */
+  --agw-sp:8px;
+
   /* === Elevation Tokens === */
   --md-sys-elevation-level1:0 1px 3px 1px rgba(0,0,0,.15),0 1px 2px rgba(0,0,0,.3);
   --md-sys-elevation-level2:0 2px 6px 2px rgba(0,0,0,.15),0 1px 2px rgba(0,0,0,.3);
@@ -135,27 +141,33 @@ body{
    width equals its height, the label is clipped away and only the icon is left, centred in a circle.
    Expanded (236px): the same items stretch back to full width and the label fades in, while the main view
    keeps its width and is translated right — pushed away, never re-laid-out. */
+/* Frosted rail: translucent container + real backdrop blur, so a custom background image shows
+   through instead of being covered by a solid plate. */
 /* The 1px edge is an inset shadow, not a border: a border would eat 1px of the content box and the
    collapsed items would come out 43x44 instead of 44x44. */
 .rail{position:fixed;top:0;bottom:0;left:0;width:56px;display:flex;flex-direction:column;overflow:hidden;z-index:100;
-  background:var(--md-sys-color-surface-container);
-  box-shadow:inset -1px 0 0 var(--md-sys-color-outline-variant);
+  background:color-mix(in srgb, var(--md-sys-color-surface-container) 58%, transparent);
+  backdrop-filter:blur(22px) saturate(1.35);-webkit-backdrop-filter:blur(22px) saturate(1.35);
+  box-shadow:inset -1px 0 0 color-mix(in srgb, var(--md-sys-color-outline-variant) 70%, transparent);
   transition:width .3s cubic-bezier(.2,0,0,1)}
 .rail[data-open="true"]{width:236px}
 @media(prefers-reduced-motion:reduce){.rail{transition:none}}
 .rail-head{display:flex;align-items:center;padding:6px;flex:none;min-width:0}
 .rail-brand{display:flex;align-items:center;gap:8px;min-width:0;flex:1 1 auto;overflow:hidden;white-space:nowrap;
   padding:6px 0;border-radius:12px;cursor:pointer}
-.rail-brand:hover{background:var(--md-sys-color-surface-container-high)}
+.rail-brand:hover{background:color-mix(in srgb, var(--md-sys-color-surface-container-high) 70%, transparent)}
 .rail-brand-txt{min-width:0;overflow:hidden}
 .rail-brand .name{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rail-brand .ver{font-size:9px;color:var(--md-sys-color-on-surface-variant);white-space:nowrap}
 /* 44x44 so the button alone fills the collapsed rail width: the icon lands dead centre */
 .rail-toggle{width:44px;height:44px;flex:none;padding:0;border:none;border-radius:999px;background:transparent;
   color:var(--md-sys-color-on-surface-variant);cursor:pointer;display:grid;place-items:center;margin-left:auto}
-.rail-toggle:hover{background:var(--md-sys-color-surface-container-high)}
+.rail-toggle:hover{background:color-mix(in srgb, var(--md-sys-color-surface-container-high) 70%, transparent)}
 .rail-toggle .msym{font-size:20px}
-.rail-ctl{display:flex;flex-direction:column;gap:4px;padding:0 6px 6px;flex:none;overflow:hidden;max-height:140px;
+/* Uploaded gateway logo: vector or raster, always contained inside its rounded chip */
+.rail-brand .brand-logo{width:28px;height:28px;flex:none;border-radius:8px;object-fit:contain;
+  background:color-mix(in srgb, var(--md-sys-color-surface-container-high) 55%, transparent)}
+.rail-ctl{display:flex;flex-direction:column;gap:var(--agw-sp);padding:0 6px 6px;flex:none;overflow:hidden;max-height:140px;
   transition:max-height .3s cubic-bezier(.2,0,0,1),opacity .2s ease}
 .rail[data-open="false"] .rail-ctl{max-height:0;opacity:0;pointer-events:none;padding-top:0;padding-bottom:0}
 .rail-ctl #topInst{width:100%;max-width:none;flex:none;
@@ -163,7 +175,7 @@ body{
   --md-outlined-field-content-size:11px;--md-outlined-field-content-line-height:16px;
   --md-outlined-field-label-text-size:10px;--md-outlined-field-label-text-populated-size:10px;
   --md-sys-typescale-body-large-size:11px;--md-sys-typescale-body-large-line-height:16px}
-.rail-acts{display:flex;align-items:center;gap:4px;justify-content:flex-end}
+.rail-acts{display:flex;align-items:center;gap:var(--agw-sp);justify-content:flex-end}
 .rail-acts md-outlined-icon-button{flex:none;border-radius:50%;
   --md-outlined-icon-button-container-height:29px;--md-outlined-icon-button-container-width:29px;
   --md-outlined-icon-button-container-shape:9999px;--md-outlined-icon-button-icon-size:16px}
@@ -202,16 +214,22 @@ body{
   transform:translateX(56px);transition:transform .3s cubic-bezier(.2,0,0,1)}
 #rail[data-open="true"] ~ .shell{transform:translateX(236px)}
 @media(prefers-reduced-motion:reduce){.shell{transition:none}}
-/* Topbar: gradient glass. It overlays the main scroller (absolute), so scrolled content passes
-   beneath the blur. --topbar-h (on .shell) is consumed by .main's top padding and .page.push's top,
-   keeping normal content and pushed pages aligned below the bar. */
-.topbar{position:absolute;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;gap:4px;
-  padding:8px 12px;border-bottom:1px solid var(--md-sys-color-outline-variant);
+/* Topbar: overlays the main scroller (absolute), so scrolled content passes beneath it; --topbar-h
+   (on .shell) is consumed by .main's top padding and .page.push's top, keeping normal content and
+   pushed pages aligned below the bar. No background card: the blur lives on ::before and is faded
+   out by a mask, so scrolled content dissolves under the title instead of ending at a hard edge or
+   border. The mask stays on the pseudo-element, so the title itself is never masked. */
+.topbar{position:absolute;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;gap:var(--agw-sp);
+  padding:8px 12px;background:none;border:none}
+.topbar::before{content:'';position:absolute;inset:0;z-index:-1;pointer-events:none;
   background:linear-gradient(to bottom,
-    color-mix(in srgb, var(--md-sys-color-surface) 85%, transparent),
-    color-mix(in srgb, var(--md-sys-color-surface) 55%, transparent) 70%,
-    color-mix(in srgb, var(--md-sys-color-surface) 15%, transparent));
-  backdrop-filter:blur(14px) saturate(1.4);-webkit-backdrop-filter:blur(14px) saturate(1.4)}
+    color-mix(in srgb, var(--md-sys-color-surface-dim) 40%, transparent),
+    color-mix(in srgb, var(--md-sys-color-surface-dim) 10%, transparent) 70%,
+    transparent);
+  backdrop-filter:blur(16px) saturate(1.4);-webkit-backdrop-filter:blur(16px) saturate(1.4);
+  -webkit-mask-image:linear-gradient(to bottom,#000 0%,#000 55%,transparent 100%);
+  mask-image:linear-gradient(to bottom,#000 0%,#000 55%,transparent 100%)}
+.topbar-logo{width:24px;height:24px;flex:none;object-fit:contain;border-radius:7px;margin-right:2px}
 .topbar md-icon-button{--md-icon-button-container-height:30px;--md-icon-button-container-width:30px;
   --md-icon-button-icon-size:18px;flex:none;color:var(--md-sys-color-on-surface-variant)}
 .topbar h1{flex:1 1 auto;font-size:16px;font-weight:500;letter-spacing:.1px;min-width:0;
@@ -259,7 +277,7 @@ body{
 
 /* ============ Structural parts Material Web does not provide ============ */
 /* Stat cards */
-.stat-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:4px;margin-bottom:4px}
+.stat-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:var(--agw-sp);margin-bottom:var(--agw-sp)}
 .stat-box{background:color-mix(in srgb, var(--md-sys-color-surface-container) 72%, transparent);border-radius:var(--md-sys-shape-corner-large);
   padding:14px;border:1px solid var(--md-sys-color-outline-variant);min-width:0}
 .stat-box .num{font-size:21px;font-weight:600;color:var(--md-sys-color-primary);min-width:0;
@@ -312,13 +330,13 @@ table.tbl{width:100%;table-layout:fixed;border-collapse:collapse;font-size:10px}
 #ov-log{min-height:80px;max-height:190px}
 
 /* Option row: switch + name/summary pair (routing options, request-record switch) */
-.opt-row{display:flex;align-items:center;gap:8px;margin-bottom:4px;padding:8px 12px;flex-wrap:wrap;
+.opt-row{display:flex;align-items:center;gap:8px;margin-bottom:var(--agw-sp);padding:8px 12px;flex-wrap:wrap;
   border:1px solid var(--md-sys-color-outline-variant);border-radius:var(--md-sys-shape-corner-large)}
 .opt-txt{min-width:0;flex:1 1 auto}
 .opt-name{font-size:11px}
 .opt-sub{font-size:10px;line-height:14px;color:var(--md-sys-color-on-surface-variant)}
-.sub-title{font-size:11px;font-weight:500;margin:8px 0 4px}
-.flex-row{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.sub-title{font-size:11px;font-weight:500;margin:var(--agw-sp) 0}
+.flex-row{display:flex;align-items:center;gap:var(--agw-sp);flex-wrap:wrap}
 
 /* Segmented chart-type switch (plain buttons: no extra component dependency) */
 .chart-tabs{display:inline-flex;gap:2px;padding:2px;flex:none;
@@ -332,7 +350,7 @@ table.tbl{width:100%;table-layout:fixed;border-collapse:collapse;font-size:10px}
 .chart-tabs button:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:1px}
 
 /* Shared inside cards */
-.card-head{display:flex;align-items:center;justify-content:space-between;gap:4px 8px;flex-wrap:wrap;margin-bottom:4px}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:var(--agw-sp);flex-wrap:wrap;margin-bottom:var(--agw-sp)}
 .card-title{font-size:13px;font-weight:500}
 .card-sub{font-size:10px;color:var(--md-sys-color-on-surface-variant)}
 /* Glass cards: the container color lives in the shadow DOM — the host's own background would only
@@ -342,9 +360,9 @@ md-filled-card{
   --md-filled-card-container-color:color-mix(in srgb, var(--md-sys-color-surface-container) 72%, transparent);
   background:transparent;
   border-radius:var(--md-sys-shape-corner-large);
-  padding:14px;margin-bottom:4px;display:block;
+  padding:14px;margin-bottom:var(--agw-sp);display:block;
   backdrop-filter:blur(16px) saturate(1.3);-webkit-backdrop-filter:blur(16px) saturate(1.3)}
-.list-gap{display:flex;flex-direction:column;gap:4px}
+.list-gap{display:flex;flex-direction:column;gap:var(--agw-sp)}
 /* Overview horizontal carousels (instance cards + stat boxes): one page = the fully visible items;
    the ovCar* helpers in app.js advance one page per tick. Instance cards: 3 per page on wide
    screens, 1 on phones (3 would squeeze below readability). Stat boxes: 3 per page on any screen.
@@ -353,12 +371,16 @@ md-filled-card{
   scroll-snap-type:x mandatory;scroll-behavior:smooth;scrollbar-width:none;-ms-overflow-style:none}
 .ov-car::-webkit-scrollbar{width:0;height:0}
 .ov-car>*{flex:0 0 100%;scroll-snap-align:start;min-width:0}
-.ov-car>.stat-box{flex-basis:calc((100% - 8px)/3)}
-@media(min-width:601px){ .ov-car>.card-item{flex-basis:calc((100% - 8px)/3)} }
+/* Two 8px gaps between the three visible boxes -- keep in sync with --agw-sp */
+.ov-car>.stat-box{flex-basis:calc((100% - 16px)/3)}
+@media(min-width:601px){ .ov-car>.card-item{flex-basis:calc((100% - 16px)/3)} }
 @media(prefers-reduced-motion:reduce){.ov-car{scroll-behavior:auto}}
 
 /* About card: gateway name (custom brand) + a one-glance summary */
-.about{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}
+.about{display:flex;align-items:flex-start;gap:var(--agw-sp);flex-wrap:wrap}
+.about-logo{width:44px;height:44px;flex:none;padding:3px;border-radius:12px;object-fit:contain;
+  background:color-mix(in srgb, var(--md-sys-color-surface-container-high) 60%, transparent);
+  border:1px solid var(--md-sys-color-outline-variant)}
 .about-txt{flex:none;min-width:0}
 .about-name{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .about-ver{font-size:10px;color:var(--md-sys-color-on-surface-variant);margin-top:1px}
@@ -366,22 +388,29 @@ md-filled-card{
   display:flex;flex-direction:column;gap:2px}
 .about-lines b{color:var(--md-sys-color-on-surface);font-variant-numeric:tabular-nums}
 
-/* Home announcement carousel: one page = one announcement (latest 5, one page per tick). The body
-   folds at 5 lines on phones (.an-body.fold only clamps under 600px, so desktop always shows all);
-   anFoldInit in app.js measures the clamp and only then shows the 展开/收起 button. */
-.an-page{display:flex;flex-direction:column;gap:4px;min-width:0}
+/* Home announcement carousel: one page = one announcement (latest 5, one page per tick). The page is a
+   single click target: its body is clamped to 3 lines here and the full text opens in the detail drawer
+   (openAnnounceView in app.js), so the carousel never grows to the height of the longest notice. */
+.an-page{display:flex;flex-direction:column;gap:var(--agw-sp);min-width:0;border-radius:var(--md-sys-shape-corner-medium);
+  cursor:pointer}
+.an-page:hover{background:color-mix(in srgb, var(--md-sys-color-surface-container-high) 55%, transparent)}
+.an-page:active{background:var(--md-sys-color-surface-container-highest)}
+.an-page:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:2px}
 .an-page-head{display:flex;align-items:baseline;gap:8px;min-width:0}
 .an-page-head .an-title{font-size:12px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .an-time{font-size:9px;color:var(--md-sys-color-on-surface-variant);flex:none;font-variant-numeric:tabular-nums}
-.an-body{font-size:11px;line-height:1.6;color:var(--md-sys-color-on-surface-variant);white-space:pre-wrap;word-break:break-word;min-width:0}
-.an-fold-btn{align-self:flex-end;height:22px}
-@media(max-width:600px){
-  .an-body.fold{display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}
-}
+.an-cue{margin-left:auto;align-self:center;font-size:14px;color:var(--md-sys-color-on-surface-variant);flex:none}
+.an-body{font-size:11px;line-height:1.6;color:var(--md-sys-color-on-surface-variant);white-space:pre-wrap;word-break:break-word;min-width:0;
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+/* Detail drawer: full text, wrapped, selectable */
+.an-detail{display:flex;flex-direction:column;gap:var(--agw-sp);min-width:0}
+.an-detail-meta{font-size:10px;color:var(--md-sys-color-on-surface-variant);font-variant-numeric:tabular-nums}
+.an-detail-body{font-size:12px;line-height:1.75;white-space:pre-wrap;word-break:break-word;
+  user-select:text;-webkit-user-select:text}
 
 /* Model plaza: one .model-page = up to 8 chips of one channel (4x2 on wide screens, 2x4 on phones);
    the ovCar carousel advances page by page, channel by channel (pages are built in channel order). */
-.model-page{display:flex;flex-direction:column;gap:6px}
+.model-page{display:flex;flex-direction:column;gap:var(--agw-sp)}
 .model-page-head{display:flex;align-items:baseline;gap:6px;min-width:0}
 .model-page-head .nm{font-size:11px;font-weight:600;color:var(--md-sys-color-on-surface);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -396,7 +425,7 @@ md-filled-card{
    md-list-item put 3-4 action buttons in the end slot, so on a 400px phone the supporting text was
    squeezed into a ~10-char column and wrapped over five lines. This card gives the details the full
    width and puts the actions on their own row at the bottom; every detail line truncates with "…". */
-.card-item{display:flex;flex-direction:column;gap:4px;min-width:0;padding:8px 12px;
+.card-item{display:flex;flex-direction:column;gap:var(--agw-sp);min-width:0;padding:8px 12px;
   background:color-mix(in srgb, var(--md-sys-color-surface-container-high) 72%, transparent);border:1px solid var(--md-sys-color-outline-variant);
   border-radius:var(--md-sys-shape-corner-large)}
 .card-item-head{display:flex;align-items:center;gap:4px;min-width:0}
@@ -407,8 +436,19 @@ md-filled-card{
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .card-item-tags{display:flex;align-items:center;gap:4px;flex:none}
 .card-item-tail{display:inline-flex;align-items:center;flex:none;color:var(--md-sys-color-on-surface-variant)}
-.card-item[data-goto]{cursor:pointer}
-.card-item[data-goto]:active{background:var(--md-sys-color-surface-container-highest)}
+.card-item[data-goto],.card-item[data-action]{cursor:pointer}
+.card-item[data-goto]:active,.card-item[data-action]:active{background:var(--md-sys-color-surface-container-highest)}
+.card-item:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:2px}
+/* Right-aligned aside in the head row (provider balance) */
+.card-item-side{margin-left:auto;flex:none;display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:48%}
+/* Provider balance badge: filled asynchronously by fillProviderBalances, so it starts as a muted
+   ellipsis, turns primary once a value lands, error below the channel's warnBelow, and a dash when
+   the lookup itself failed. */
+.pv-bal{font-size:10px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap;min-width:0;
+  color:var(--md-sys-color-primary);overflow:hidden;text-overflow:ellipsis}
+.pv-bal.loading{font-weight:400;color:var(--md-sys-color-on-surface-variant)}
+.pv-bal.err{font-weight:400;color:var(--md-sys-color-on-surface-variant)}
+.pv-bal.low{color:var(--md-sys-color-error)}
 .card-item-state{margin-left:auto;flex:none;font-size:9px;font-weight:600;letter-spacing:.04em;
   color:var(--md-sys-color-on-surface-variant)}
 .card-item-state.ok{color:var(--md-sys-color-primary)}
@@ -417,8 +457,8 @@ md-filled-card{
   font-size:10px;line-height:14px;color:var(--md-sys-color-on-surface-variant)}
 .card-item-line{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .card-item-detail .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:9px}
-.card-item-acts{display:flex;align-items:center;justify-content:flex-end;gap:4px;flex-wrap:wrap;
-  margin-top:2px;padding-top:4px;border-top:1px solid var(--md-sys-color-outline-variant)}
+.card-item-acts{display:flex;align-items:center;justify-content:flex-end;gap:var(--agw-sp);flex-wrap:wrap;
+  padding-top:var(--agw-sp);border-top:1px solid var(--md-sys-color-outline-variant)}
 /* Footer buttons stay compact: the global rule pins min-width:64px + 16px padding, too wide for a phone row */
 .card-item-acts md-outlined-button,.card-item-acts md-text-button,.card-item-acts md-filled-button{
   min-width:0!important;padding:0 8px!important}
@@ -443,7 +483,7 @@ md-filled-card{
 .rp-help .ex{color:var(--md-sys-color-on-surface-variant)}
 .muted{color:var(--md-sys-color-on-surface-variant)}
 .small{font-size:10px}
-.grid-form{display:flex;gap:4px;flex-wrap:wrap}
+.grid-form{display:flex;gap:var(--agw-sp);flex-wrap:wrap}
 .grid-form > *{flex:1 1 144px;min-width:0}
 .hidden{display:none!important}
 
@@ -480,8 +520,16 @@ md-filled-card{
 .dlg-x{background:none;border:none;color:var(--md-sys-color-on-surface-variant);font-size:14px;
   width:26px;height:26px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .dlg-x:hover{background:var(--md-sys-color-surface-container-highest)}
-.dlg-body{padding:12px 16px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:4px}
-.dlg-foot{display:flex;justify-content:flex-end;gap:4px;padding:8px 16px 12px;flex-shrink:0}
+.dlg-body{padding:12px 16px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:var(--agw-sp)}
+.dlg-foot{display:flex;justify-content:flex-end;gap:var(--agw-sp);padding:8px 16px 12px;flex-shrink:0}
+/* Brand dialog: clickable logo preview (a dashed tile until an image is picked) */
+.brand-logo-pick{width:64px;height:64px;flex:none;padding:6px;border-radius:16px;cursor:pointer;
+  border:1px dashed var(--md-sys-color-outline);overflow:hidden;
+  background:color-mix(in srgb, var(--md-sys-color-surface-container-high) 65%, transparent);
+  display:grid;place-items:center}
+.brand-logo-pick:hover{background:var(--md-sys-color-surface-container-highest)}
+.brand-logo-pick img{width:100%;height:100%;object-fit:contain}
+.brand-logo-pick .msym{font-size:24px;color:var(--md-sys-color-on-surface-variant)}
 /* Plain HTML buttons (used inside dialogs) */
 .pbtn{border:none;cursor:pointer;font-size:10px;font-weight:500;border-radius:16px;
   height:27px;padding:0 12px;display:inline-flex;align-items:center;justify-content:center;gap:4px;
@@ -492,7 +540,7 @@ md-filled-card{
 .pbtn-text:hover{background:var(--md-sys-color-surface-container-highest)}
 .pbtn[hidden]{display:none}
 /* Model rename tag editor */
-.mm-row{display:grid;grid-template-columns:1fr 1fr 38px;gap:4px;align-items:stretch}
+.mm-row{display:grid;grid-template-columns:1fr 1fr 38px;gap:var(--agw-sp);align-items:stretch}
 .mm-row md-outlined-text-field{width:100%;--md-outlined-field-top-space:12px;--md-outlined-field-bottom-space:12px;--md-outlined-field-content-size:10px;--md-outlined-field-content-line-height:16px;--md-outlined-field-label-text-size:9px;--md-outlined-field-label-text-populated-size:9px;--md-sys-typescale-body-large-size:10px}
 .mm-add-btn{width:38px;border:none;border-radius:10px;cursor:pointer;background:var(--md-sys-color-primary);color:var(--md-sys-color-on-primary);display:flex;align-items:center;justify-content:center}
 .mm-add-btn .msym{font-size:18px}
@@ -592,7 +640,7 @@ md-navigation-tab md-icon[slot=active-icon]{font-variation-settings:'FILL' 1,'wg
 /* ============ Patches: keyboard accessibility / mobile bottom bar / in-dialog page picker ============ */
 /* Unified focus ring: custom-drawn buttons (sidebar/FAB/page grid) have no focus style of their own, so keyboard focus was invisible */
 .rail-item:focus-visible,.rail-toggle:focus-visible,.icon-act:focus-visible,.pbtn:focus-visible,
-.md-btn:focus-visible,.th-swatch:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:2px}
+.md-btn:focus-visible,.th-swatch:focus-visible,.brand-logo-pick:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:2px}
 /* Mobile: dialog is nearly fullscreen; the body area stays scrollable when the keyboard is up */
 @media(max-width:600px){
   .dlg-box{width:100%;max-height:92dvh;border-radius:16px 16px 0 0}

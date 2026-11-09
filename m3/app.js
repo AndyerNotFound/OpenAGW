@@ -147,6 +147,7 @@ await new Promise(r=>setTimeout(r,3500)); // let the old process exit and the ne
   async getTunnel(signal){ return this._fetch(`${this.base}/admin/api/tunnel`,{headers:this._hdr()},signal); }
   async tunnelAction(action,signal){ return this._fetch(`${this.base}/admin/api/tunnel`,{method:'POST',headers:this._hdr(),body:JSON.stringify({action})},signal); }
   async getBalance(inst,ch,signal){ return this._fetch(`${this.base}/admin/api/balance/${encodeURIComponent(inst)}/${encodeURIComponent(ch)}`,{headers:this._hdr()},signal); }
+  async getBalances(inst,signal){ return this._fetch(`${this.base}/admin/api/balances/${encodeURIComponent(inst)}`,{headers:this._hdr()},signal); }
   async probeNow(inst,signal){ return this._fetch(`${this.base}/admin/api/probe/${encodeURIComponent(inst)}`,{method:'POST',headers:this._hdr()},signal); }
   async shutdownAll(signal){ return this._fetch(`${this.base}/admin/api/shutdown-all`,{method:'POST',headers:this._hdr()},signal); }
 }
@@ -387,13 +388,14 @@ async function fillInstSelect(sel, current, signal){
 // Three stacked rows instead of one squeezed line: name+tags+status on top, detail lines in the middle,
 // action buttons on their own row at the bottom. Every detail line is single-line with an ellipsis and
 // keeps the full text in title=, so a long path or note never reflows the card.
-function cardItem({dot='', name='', tags='', state='', stateCls='', tail='', lines=[], acts='', data=''}){
+function cardItem({dot='', name='', tags='', state='', stateCls='', tail='', side='', lines=[], acts='', data=''}){
   const body=(lines||[]).filter(Boolean);
   return `<div class="card-item"${data?' '+data:''}>
     <div class="card-item-head">
       ${dot?`<span class="card-item-dot ${dot}" aria-hidden="true"></span>`:''}
       <span class="card-item-name" title="${escAttr(name)}">${esc(name)}</span>
       ${tags?`<span class="card-item-tags">${tags}</span>`:''}
+      ${side?`<span class="card-item-side">${side}</span>`:''}
       ${state?`<span class="card-item-state ${stateCls}">${state}</span>`:''}
       ${tail?`<span class="card-item-tail">${tail}</span>`:''}
     </div>
@@ -524,10 +526,10 @@ async function renderOverview(){
     try{
       const d=await adapter.getAnnouncements(signal);
       const al=$('#ov-ann-list');
+      anItems=d.items||[];  // anView resolves the clicked page here (the carousel previews only 5)
       if(al){
         const aLeft=al.scrollLeft;  // keep the carousel position across the 5s refresh
-        al.innerHTML=(d.items||[]).slice(0,5).map(anPage).join('')||'<div class="empty">暂无公告</div>';
-        anFoldInit(al);
+        al.innerHTML=anItems.slice(0,5).map(anPage).join('')||'<div class="empty">暂无公告</div>';
         al.scrollLeft=Math.min(aLeft, al.scrollWidth-al.clientWidth);
       }
     }catch(_){}
@@ -542,34 +544,34 @@ function anCard(a){
     name:a.title,
     state:fmtDateTime(a.at),
     lines:String(a.body||'').split('\n').filter(Boolean),
-    acts:`<button class="pbtn pbtn-text" data-action="anEdit" data-name="${a.id}">编辑</button>`+
-         `<button class="pbtn pbtn-text" data-action="anDel" data-name="${a.id}">删除</button>`,
+    data:`data-action="anView" data-name="${escAttr(a.id)}"`,
+    acts:`<button class="pbtn pbtn-text" data-action="anView" data-name="${escAttr(a.id)}">查看</button>`+
+         `<button class="pbtn pbtn-text" data-action="anEdit" data-name="${escAttr(a.id)}">编辑</button>`+
+         `<button class="pbtn pbtn-text" data-action="anDel" data-name="${escAttr(a.id)}">删除</button>`,
   });
 }
-// Home carousel: one page per announcement, latest 5 only (annOpen keeps 展开 state across the 5s refresh).
-const annOpen=new Set();
+// Announcement detail -> the drawer (the same bottom sheet the dialogs use). The home carousel only
+// previews three lines and the list page clamps one line per row, so this is the only place the full
+// text lives -- and a long notice can never stretch a card again.
+function openAnnounceView(a){
+  if(!a) return;
+  openDialog(a.title||'公告', `<div class="an-detail">
+    <div class="an-detail-meta">${fmtDateTime(a.at)}</div>
+    <div class="an-detail-body">${esc(a.body||'(无内容)')}</div>
+  </div>`, {okText:'关闭', cancel:false});
+}
+// Home carousel: one page per announcement, latest 5 only. A page is one click target; the whole page
+// opens the drawer, and Enter/Space does the same through the delegated keydown handler.
 function anPage(a){
-  const open=annOpen.has(a.id);
-  return `<div class="an-page" data-id="${a.id}">
-    <div class="an-page-head"><span class="an-title">${esc(a.title)}</span><span class="an-time">${fmtDateTime(a.at)}</span></div>
-    <div class="an-body${open?'':' fold'}">${esc(a.body||'(无内容)')}</div>
-    <button type="button" class="pbtn pbtn-text an-fold-btn" hidden></button>
+  return `<div class="an-page" data-action="anView" data-name="${escAttr(a.id)}" role="button" tabindex="0"
+      aria-label="查看公告: ${escAttr(a.title)}" title="查看全文">
+    <div class="an-page-head">
+      <span class="an-title">${esc(a.title)}</span>
+      <span class="an-time">${fmtDateTime(a.at)}</span>
+      <span class="msym an-cue" aria-hidden="true">chevron_right</span>
+    </div>
+    <div class="an-body">${esc(a.body||'(无内容)')}</div>
   </div>`;
-}
-// Show the fold button only when the 5-line clamp actually truncates (phones, long bodies).
-function anFoldInit(list){
-  list.querySelectorAll('.an-page').forEach(pg=>{
-    const body=pg.querySelector('.an-body'), btn=pg.querySelector('.an-fold-btn');
-    if(!body||!btn) return;
-    if(!body.classList.contains('fold')) return;  // expanded by user earlier
-    if(body.scrollHeight>body.clientHeight+2){ btn.hidden=false; btn.textContent='展开'; }
-    else body.classList.remove('fold');           // fits in 5 lines: no button
-    btn.addEventListener('click',()=>{
-      const id=pg.dataset.id;
-      if(body.classList.toggle('fold')){ annOpen.delete(id); btn.textContent='展开'; }
-      else { annOpen.add(id); btn.textContent='收起'; }
-    });
-  });
 }
 async function renderAnnounce(){
   const list=$('#an-list'); if(!list) return;
@@ -586,7 +588,7 @@ function anLocalDT(ms){  // ms -> datetime-local string (local timezone)
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 function openAnnounceDialog(a){
-  openDialog(a?'编辑公告':'发布公告', `<div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
+  openDialog(a?'编辑公告':'发布公告', `<div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
     <md-outlined-text-field data-f="atitle" label="标题" value="${escAttr(a?a.title:'')}"></md-outlined-text-field>
     <md-outlined-text-field data-f="abody" label="内容(可换行)" type="textarea" rows="5" value="${escAttr(a?a.body||'':'')}"></md-outlined-text-field>
     <md-outlined-text-field data-f="atime" label="发布时间(留空=现在)" type="datetime-local" value="${a&&a.at?anLocalDT(a.at):''}"></md-outlined-text-field>
@@ -632,6 +634,7 @@ function channelCard(ch){
     dot: ch.default?'ok':'',
     name: ch.name,
     tags,
+    side:`<span class="pv-bal loading" data-ch="${escAttr(ch.name)}" data-warn="${escAttr(ch.warnBelow||'')}" title="余额查询中">···</span>`,
     lines,
     acts:`<button type="button" class="icon-act ${ch.default?'on':''}" data-action="setDefaultProvider" data-name="${escAttr(ch.name)}" ${ch.default?'disabled':''} title="${ch.default?'当前默认渠道':'设为默认渠道'}"><span class="msym">${ch.default?'star':'star_outline'}</span></button>
       <button type="button" class="icon-act" data-action="chBalance" data-name="${escAttr(ch.name)}" title="查余额"><span class="msym">account_balance_wallet</span></button>
@@ -646,6 +649,7 @@ async function renderProviders(){
     const cfg=await adapter.getConfig(cur,signal); Store.configs.set(cur,cfg);
     const chs=cfg.channels||[];
     $('#pv-list').innerHTML=chs.length?chs.map(channelCard).join(''):'<div class="empty">该实例暂无渠道，点右上「添加渠道」</div>';
+    fillProviderBalances(cur, signal);  // async: the cards paint first, balances land per channel
     const px=Object.entries(cfg.proxies||{});
     $('#px-list').innerHTML=px.length?px.map(([n,p])=>cardItem({
       name:n,
@@ -870,7 +874,7 @@ async function renderCards(){
 // ---- Key-issuing dialog ----
 async function openCardDialog(){
   openDialog('发新卡 (实例 '+Store.inst+')', `
-    <div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
+    <div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
       <md-outlined-text-field data-f="name" label="名称(给谁用的)" required></md-outlined-text-field>
       <md-outlined-text-field data-f="quotaWan" label="额度(万 tokens)" type="number" value="100" helper="0 或留空=不限量; 100 = 100万tokens"></md-outlined-text-field>
       <md-outlined-text-field data-f="models" label="限定模型(逗号分隔, 留空=全部可用)" helper="例如 deepseek-chat, gpt-4o-mini"></md-outlined-text-field>
@@ -886,7 +890,7 @@ async function openCardDialog(){
       try{
         const r=await adapter.createKey(Store.inst,body);
         const k=r.key||{};
-        openDialog('发卡成功', `<div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
+        openDialog('发卡成功', `<div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
           <div style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">完整 Key (配置里可查, 也可随时回来复制):</div>
           <div class="mono" style="word-break:break-all;background:var(--md-sys-color-surface-container);padding:8px;border-radius:10px;user-select:all">${esc(k.key||'')}</div>
           <div style="font-size:10px">客户端用法: base_url 填 <span class="mono">http://&lt;网关地址&gt;:${Store.mainPort||'主端口'}/${esc(Store.inst==='default'?'':Store.inst+'/')}v1</span>（末尾 /v1 可省略）, API Key 填上面的 Key</div>
@@ -909,7 +913,7 @@ async function cardAction(action,key,name,on){
     }
     if(action==='rechargeKey'){
       openDialog('充值/重置 「'+esc(name||'')+'」', `
-        <div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
+        <div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
           <md-outlined-text-field data-f="addWan" label="追加额度(万 tokens)" type="number" value="0" helper="在现有额度上追加; 0=不变"></md-outlined-text-field>
           <label style="display:flex;align-items:center;gap:4px;font-size:11px"><md-checkbox data-f="reset"></md-checkbox>重置已用量为 0</label>
         </div>`, {onOk:async ()=>{
@@ -927,13 +931,59 @@ async function cardAction(action,key,name,on){
 }
 
 // ---- Channel balances ----
+// Provider cards carry the upstream balance, so it is readable without opening anything. One batched
+// request fills every card (the gateway caches successful lookups for balanceCacheSec); a channel that
+// has no balance endpoint simply loses its badge instead of showing an error for something unconfigured.
+function balLabel(bal, unit){
+  const u=String(unit||'').trim();
+  const sym={CNY:'¥',RMB:'¥',USD:'$',EUR:'€',HKD:'HK$',TWD:'NT$',GBP:'£'}[u.toUpperCase()]||'';
+  const v=String(bal==null?'':bal).trim();
+  return sym?sym+v:(u?v+' '+u:v);
+}
+function pvBalEls(){
+  const out=new Map();
+  $$('#pv-list .pv-bal').forEach(el=>{ if(el.dataset.ch) out.set(el.dataset.ch, el); });
+  return out;
+}
+function pvPaintBal(el, item){
+  if(!el) return;
+  if(!item || item.noTarget){ el.remove(); return; }
+  el.classList.remove('loading','err','low');
+  if(!item.ok){
+    el.textContent='—'; el.classList.add('err');
+    el.title='余额查询失败: '+(item.error||'未知错误');
+    return;
+  }
+  el.textContent=balLabel(item.balance, item.unit);
+  const warn=Number(el.dataset.warn)||0, n=Number(item.balance);
+  const low=warn>0 && isFinite(n) && n<=warn;
+  if(low) el.classList.add('low');
+  el.title='余额 '+balLabel(item.balance,item.unit)+(item.unit?' ('+item.unit+')':'')
+    +(low?' · 低于预警阈值 '+warn:'')+(item.url?' · '+item.url:'');
+}
+// seq guards against a slow response landing on a re-rendered list (channel edits re-render the page)
+let pvBalSeq=0;
+async function fillProviderBalances(inst, signal){
+  const seq=++pvBalSeq;
+  let r;
+  try{ r=await adapter.getBalances(inst, signal); }
+  catch(e){
+    if(e.name==='AbortError') return;
+    pvBalEls().forEach(el=>pvPaintBal(el,{ok:false,error:e.message}));
+    return;
+  }
+  if(seq!==pvBalSeq) return;
+  const byCh=new Map(((r&&r.items)||[]).map(it=>[it.channel, it]));
+  pvBalEls().forEach((el,ch)=>pvPaintBal(el, byCh.get(ch)||{ok:false,error:'该渠道未返回余额'}));
+}
 async function chBalanceAction(chName){
   snack('查询 '+chName+' 余额…');
   try{
     const r=await adapter.getBalance(Store.inst,chName);
+    pvPaintBal(pvBalEls().get(chName), {ok:true, balance:r.balance, unit:r.unit, url:r.url});
     openDialog('渠道余额 · '+esc(chName), `<div style="padding:4px 0;text-align:center">
       <div style="font-size:26px;font-weight:600;color:var(--md-sys-color-primary)">${esc(String(r.balance))} <span style="font-size:11px">${esc(r.unit||'')}</span></div>
-      <div class="muted small" style="margin-top:4px">${esc(r.url||'')}</div></div>`, {hideCancel:true});
+      <div class="muted small" style="margin-top:8px">${esc(r.url||'')}</div></div>`, {hideCancel:true});
   }catch(e){ snack(e.message,true); }
 }
 
@@ -1201,11 +1251,11 @@ function applyTheme(t){
 function loadTheme(){try{const t=JSON.parse(localStorage.getItem('agw-theme')||'{}');if(t.mode)applyTheme(t);else applyTheme({mode:'dark',seed:'#6750A4'});}catch(_){applyTheme({mode:'dark',seed:'#6750A4'});}}
 function saveTheme(){localStorage.setItem('agw-theme',JSON.stringify(themeState));}
 function openThemeDialog(){
-  openDialog('主题',`<div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
+  openDialog('主题',`<div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
     <label style="display:flex;align-items:center;gap:4px"><md-switch id="th-dark" ${themeState.mode==='dark'?'selected':''}></md-switch><span style="font-size:11px">深色主题</span></label>
-    <div><div style="font-size:10px;color:var(--md-sys-color-on-surface-variant);margin-bottom:4px">主色 (Material You)</div>
+    <div><div style="font-size:10px;color:var(--md-sys-color-on-surface-variant);margin-bottom:8px">主色 (Material You)</div>
     <div id="th-swatches" style="display:flex;gap:4px;flex-wrap:wrap"></div>
-    <div style="display:flex;align-items:center;gap:4px;margin-top:4px"><button type="button" class="btn sm outline" id="th-mdu">从手机取色</button><span style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">Material You 壁纸色</span><input type="color" id="th-custom" value="${themeState.seed}" style="width:32px;height:29px;border:none;border-radius:8px;cursor:pointer;background:none"><span style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">自定义颜色</span></div></div>
+    <div style="display:flex;align-items:center;gap:8px;margin-top:8px"><button type="button" class="btn sm outline" id="th-mdu">从手机取色</button><span style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">Material You 壁纸色</span><input type="color" id="th-custom" value="${themeState.seed}" style="width:32px;height:29px;border:none;border-radius:8px;cursor:pointer;background:none"><span style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">自定义颜色</span></div></div>
   </div>`,{okText:'完成',cancel:false});
   const sw=$('#th-swatches');if(sw)sw.innerHTML=SWATCHES.map(c=>`<button type="button" class="th-swatch" data-c="${c}" style="width:29px;height:29px;border-radius:50%;border:2px solid ${c===themeState.seed?'var(--md-sys-color-on-surface)':'transparent'};background:${c};cursor:pointer;padding:0"></button>`).join('');
   const dk=$('#th-dark');if(dk)dk.addEventListener('click',()=>setTimeout(()=>{applyTheme({mode:dk.selected?'dark':'light',seed:themeState.seed});saveTheme();},0));
@@ -1297,7 +1347,7 @@ function keyDlgVisible(){ return !$('#dlgOverlay').hidden && $('#dlgTitle').text
 function openKeyDialog(){
   if(keyDlgVisible()) return;
   openDialog('管理令牌', `
-    <div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
+    <div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
       <md-outlined-text-field data-f="key" label="管理 API 令牌(可选)" type="password" value="${escAttr(localStorage.getItem('agw-admin-key')||'')}"
         helper="面板登录请用 agw web login 的一次性链接; 这里只用于脚本/API 的 webToken"></md-outlined-text-field>
     </div>`, {okText:'保存', onOk:saveKey});
@@ -1358,7 +1408,7 @@ function mmShowModelPicker(list){
   box.id='mmSelBox';
   box.style.cssText='border:1px solid var(--md-sys-color-outline-variant);border-radius:10px;padding:8px;max-height:184px;overflow-y:auto';
   const head=document.createElement('div');
-  head.style.cssText='display:flex;align-items:center;gap:4px;margin-bottom:4px';
+  head.style.cssText='display:flex;align-items:center;gap:4px;margin-bottom:8px';
   head.innerHTML='<span style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">已获取 '+list.length+' 个, 勾选后填入</span>'
     +'<button type="button" class="pbtn pbtn-text" id="mmSelAll" style="height:21px;padding:0 12px;margin-left:auto">全选</button>'
     +'<button type="button" class="pbtn pbtn-text" id="mmSelNone" style="height:21px;padding:0 12px">清空</button>'
@@ -1404,7 +1454,7 @@ function openProviderDialog(ch){
   const pOpts=['-'].concat(pxs); if(c.proxy&&!pOpts.includes(c.proxy)) pOpts.push(c.proxy);
   const curP=c.proxy||'-';
   openDialog(ch?'编辑渠道':'添加渠道', `
-    <div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
+    <div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
       <md-outlined-text-field data-f="name" label="名称" value="${escAttr(c.name)}" required></md-outlined-text-field>
       <md-outlined-select data-f="type" label="类型" style="width:100%">
         ${['openai','claude','gemini'].map(t=>`<md-select-option value="${t}" ${t===c.type?'selected':''}>${t}</md-select-option>`).join('')}
@@ -1418,7 +1468,7 @@ function openProviderDialog(ch){
       <md-outlined-text-field data-f="delayMs" label="请求延迟(毫秒, 0=关闭)" type="number" value="${escAttr(String(c.delayMs||0))}" helper="每个请求发出前等待这么久; 同渠道并发请求按此间隔排队发出, 可缓解 429 限流"></md-outlined-text-field>
       <md-outlined-text-field data-f="paramOverride" label="参数覆写 (JSON, 留空=不覆写)" type="textarea" rows="3" value="${escAttr(c.paramOverride?JSON.stringify(c.paramOverride,null,2):'')}" helper="覆写最终发往上游的请求体, 盖过 SDK 同名参数; 对象深合并, 数组整体替换, null=删除该参数; 键名按渠道方言(openai/claude/gemini)写"></md-outlined-text-field>
       <div>
-        <div style="font-size:10px;color:var(--md-sys-color-on-surface-variant);margin-bottom:4px">模型改名 (对外名 → 真实名; 右框留空=按原名提供; 手机上左滑标签可删除; 对外名会出现在 /v1/models; 重启实例后生效)</div>
+        <div style="font-size:10px;color:var(--md-sys-color-on-surface-variant);margin-bottom:8px">模型改名 (对外名 → 真实名; 右框留空=按原名提供; 手机上左滑标签可删除; 对外名会出现在 /v1/models; 重启实例后生效)</div>
         <div class="mm-row">
           <md-outlined-text-field id="mm-alias" label="覆盖名(对外)"></md-outlined-text-field>
           <md-outlined-text-field id="mm-real" label="原始名(可空)"></md-outlined-text-field>
@@ -1429,7 +1479,7 @@ function openProviderDialog(ch){
       <md-outlined-text-field data-f="apiKey" label="API Key" type="password" value="${escAttr(c.apiKey||'')}" placeholder="${c.hasKey?'(已设, 留空不改)':'API Key'}"></md-outlined-text-field>
       <label style="display:flex;align-items:center;gap:4px;font-size:11px"><md-checkbox data-f="useResponses" ${c.useResponses?'selected':''}></md-checkbox>上游用 Responses API <span class="muted small">(仅 openai 类型; 不勾=自动: Responses 客户端直通 /v1/responses, Chat 客户端直通 chat)</span></label>
       <label style="display:flex;align-items:center;gap:4px;font-size:11px"><md-checkbox data-f="probe" ${c.probe?'selected':''}></md-checkbox>参与成功率探测 <span class="muted small">(需实例开启 probe; 用户端可见成功率)</span></label>
-      <div class="muted small" style="margin-top:4px">上游余额 (列表里 💰 按钮查; 三项留空 = 用内置预设)</div>
+      <div class="muted small" style="margin-top:8px">上游余额 (列表里 💰 按钮查; 三项留空 = 用内置预设)</div>
       <md-outlined-text-field data-f="balanceUrl" label="余额接口 URL (可相对 Base URL)" value="${escAttr(c.balanceUrl||'')}" placeholder="/v1/user/info"></md-outlined-text-field>
       <md-outlined-text-field data-f="balancePath" label="取值路径 (点路径)" value="${escAttr(c.balancePath||'')}" placeholder="data.balance"></md-outlined-text-field>
       <md-outlined-text-field data-f="balanceUnit" label="单位 (可选)" value="${escAttr(c.balanceUnit||'')}" placeholder="CNY"></md-outlined-text-field>
@@ -1474,7 +1524,7 @@ function openProviderDialog(ch){
 function openPortDialog(name){
   const i=Store.instances.find(x=>x.name===name)||{};
   openDialog(name?'编辑实例 '+name:'新建实例', `
-    <div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
+    <div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
       <md-outlined-text-field data-f="name" label="实例名" value="${escAttr(i.name||'')}" ${(name==='default')?'disabled':''} required helper="${name?(name==='default'?'主实例不能改名':'改名会同步改配置文件名, 热生效'):'只能含字母/数字/中划线/下划线'}"></md-outlined-text-field>
       <md-outlined-text-field data-f="port" label="端口" type="number" value="${i.port||16390}" helper="${(i.tlsOn||(name&&name!=='default'))?'开 HTTPS 的实例只经主端口访问, 此端口仅作标识':'监听端口(开 HTTPS 后只提供 https)'}"></md-outlined-text-field>
       <md-outlined-text-field data-f="webToken" label="访问令牌" type="password" value="" helper="留空保存=清除访问令牌"></md-outlined-text-field>
@@ -1552,7 +1602,7 @@ function openProxyDialog(name){
   const cur=Store.configs.get(Store.inst);
   const p=(cur&&cur.proxies&&cur.proxies[name])||{};
   openDialog(name?'编辑代理 '+name:'添加代理', `
-    <div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
+    <div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
       <md-outlined-text-field data-f="name" label="名称" value="${escAttr(name||'')}" ${name?'disabled':''} required helper="渠道里用这个名字引用"></md-outlined-text-field>
       <md-outlined-select data-f="type" label="类型" style="width:100%">
         ${['socks5','http'].map(t=>`<md-select-option value="${t}" ${t===(p.type||'socks5')?'selected':''}>${t}</md-select-option>`).join('')}
@@ -1970,6 +2020,7 @@ document.body.addEventListener('click', e=>{
     else if(a==='delProxy') delProxy(n);
     else if(a==='viewBody') viewRecordBody(act.dataset.id);
     else if(a==='cwDel') cwDel(+act.dataset.i);
+    else if(a==='anView'){ openAnnounceView(anItems.find(x=>x.id===n)); }
     else if(a==='anEdit'){ openAnnounceDialog(anItems.find(x=>x.id===n)); }
     else if(a==='anDel'){ if(confirm('删除该公告?')) adapter.deleteAnnouncement(n).then(renderAnnounce).catch(x=>snack(x.message,true)); }
     else if(a==='revokeSession') revokeSession(act.dataset.sid||'');
@@ -1977,6 +2028,14 @@ document.body.addEventListener('click', e=>{
   }
   const cmdBtn=e.target.closest('[data-cmd]');
   if(cmdBtn?.dataset.cmd) doInstanceAction(cmdBtn.dataset.name, cmdBtn.dataset.cmd);
+});
+// Keyboard path for div[role=button] targets (a real <button> cannot hold the announcement page layout).
+// Only the target itself counts: a card wrapping action buttons must keep its own Enter behaviour.
+document.body.addEventListener('keydown', e=>{
+  if(e.key!=='Enter' && e.key!==' ') return;
+  const el=e.target;
+  if(!el || !el.matches || !el.matches('[data-action="anView"]')) return;
+  e.preventDefault(); el.click();
 });
 $('#dlgOk').addEventListener('click', async ()=>{
   const btn=$('#dlgOk'); btn.disabled=true;
@@ -2135,7 +2194,7 @@ function openBgDialog(){
     </md-outlined-select>
     <div style="display:flex;gap:8px;align-items:center;min-width:0">
       <div id="bgPreview" title="点击选择图片" style="width:72px;height:48px;flex:none;border-radius:8px;border:1px solid var(--md-sys-color-outline-variant);background:var(--md-sys-color-surface-container-high) center/cover no-repeat"></div>
-      <div style="display:flex;flex-direction:column;gap:4px;min-width:0;flex:1">
+      <div style="display:flex;flex-direction:column;gap:8px;min-width:0;flex:1">
         <input type="file" id="bgFile" accept="image/*" style="font-size:10px;min-width:0;max-width:100%">
         <div id="bgFileHint" style="font-size:9px;color:var(--md-sys-color-on-surface-variant)"></div>
       </div>
@@ -2180,28 +2239,104 @@ document.body.addEventListener('change', async e=>{
   }catch(err){ snack(err.message||'图片处理失败',true); bgSyncPreview(); }
 });
 
-// ---- Custom brand name (edit via the brand area top-left; stored in localStorage, per device) ----
-let brandState={name:'OpenAGW',ver:'Material Web v2.11'};
+// ---- Custom brand: page name + gateway logo (edit via the brand area top-left; localStorage, per device) ----
+// The logo is shown in the sidebar brand, the topbar (next to the page title), the about card, and as
+// the favicon. An SVG stays vector; raster images are downscaled with alpha preserved. It never leaves
+// the device: localStorage holds it as a data URL.
+let brandState={name:'OpenAGW',ver:'Material Web v2.11',logo:''};
+let brandDraft=null;        // logo picked in the open dialog; written to localStorage only on 保存
+let brandLogoCleared=false; // 移除 Logo pressed in the open dialog
 function applyBrand(b){
-  brandState={name:(b&&b.name)||'OpenAGW', ver:b&&b.ver!=null?b.ver:'Material Web v2.11'};
+  brandState={name:(b&&b.name)||'OpenAGW', ver:b&&b.ver!=null?b.ver:'Material Web v2.11', logo:(b&&b.logo)||''};
   const n=$('.rail-brand .name'), v=$('.rail-brand .ver');
   if(n) n.textContent=brandState.name;
   if(v){ v.textContent=brandState.ver; v.style.display=brandState.ver?'':'none'; }
+  const an=$('#ov-about-name'), av=$('#ov-about-ver');
+  if(an) an.textContent=brandState.name;
+  if(av){ av.textContent=brandState.ver; av.style.display=brandState.ver?'':'none'; }
+  ['#railLogo','#topLogo','#ov-about-logo'].forEach(sel=>{
+    const img=$(sel); if(!img) return;
+    if(brandState.logo){ img.src=brandState.logo; img.hidden=false; }
+    else { img.hidden=true; img.removeAttribute('src'); }
+  });
+  // Favicon follows the logo; removing the logo restores the browser default icon
+  let fav=$('#favicon');
+  if(brandState.logo){
+    if(!fav){ fav=document.createElement('link'); fav.id='favicon'; fav.rel='icon'; document.head.appendChild(fav); }
+    fav.href=brandState.logo;
+  } else if(fav) fav.remove();
   document.title=brandState.name+(brandState.ver?' · '+brandState.ver:'');
 }
 function loadBrand(){ try{ applyBrand(JSON.parse(localStorage.getItem('agw-brand')||'null')); }catch(_){ applyBrand(null); } }
+function brandLogoSrc(){ return brandLogoCleared?null:(brandDraft||brandState.logo||null); }
+function brandEncode(img,max){
+  const sc=Math.min(1,max/Math.max(img.width||1,img.height||1));
+  const c=document.createElement('canvas');
+  c.width=Math.max(1,Math.round(img.width*sc)); c.height=Math.max(1,Math.round(img.height*sc));
+  c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+  const webp=c.toDataURL('image/webp',.92);
+  return /^data:image\/webp/i.test(webp)?webp:c.toDataURL('image/png');
+}
+async function brandPrepareLogo(file){
+  if(/svg/i.test(file.type)||/\.svg$/i.test(file.name||'')){
+    if(file.size>200*1024) throw new Error('SVG 过大, 上限 200KB');
+    const raw=await bgReadFile(file);
+    return 'data:image/svg+xml;base64,'+raw.slice(raw.indexOf(',')+1);
+  }
+  const img=await bgDecode(await bgReadFile(file));
+  let out='';
+  for(const max of [256,192,144,96]){ out=brandEncode(img,max); if(out.length<=220*1024) break; }
+  return out;
+}
+function brandSyncLogo(){
+  const pv=$('#brandLogoPreview'), ph=$('#brandLogoPlaceholder'), hint=$('#brandLogoHint'), clr=$('#brandLogoClear');
+  const logo=brandLogoSrc();
+  if(pv){ if(logo){ pv.src=logo; pv.hidden=false; } else { pv.hidden=true; pv.removeAttribute('src'); } }
+  if(ph) ph.style.display=logo?'none':'';
+  if(hint) hint.textContent=brandDraft?`新 Logo 已就绪 (${Math.round(brandDraft.length/1024)}KB), 点「保存」生效`
+    :(logo?'当前 Logo 已设置':'支持 SVG / PNG / JPG / WebP / GIF · 仅保存在本设备');
+  if(clr) clr.style.display=logo?'':'none';
+}
 function openBrandDialog(){
-  openDialog('修改页面名称', `<div style="display:flex;flex-direction:column;gap:4px;padding-top:8px">
+  brandDraft=null; brandLogoCleared=false;
+  openDialog('品牌设置', `<div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
+    <div style="display:flex;gap:10px;align-items:center;min-width:0">
+      <button type="button" class="brand-logo-pick" id="brandLogoPick" aria-label="选择 Logo" title="点击选择 Logo">
+        <img id="brandLogoPreview" alt="" hidden>
+        <span class="msym" id="brandLogoPlaceholder">add_photo_alternate</span>
+      </button>
+      <div style="display:flex;flex-direction:column;gap:8px;min-width:0;flex:1">
+        <div style="font-size:11px">网关 Logo</div>
+        <input type="file" id="brandLogoFile" accept="image/svg+xml,image/png,image/jpeg,image/webp,image/gif" style="font-size:10px;min-width:0;max-width:100%">
+        <div id="brandLogoHint" style="font-size:9px;color:var(--md-sys-color-on-surface-variant)"></div>
+      </div>
+    </div>
+    <md-text-button id="brandLogoClear" style="align-self:flex-start">移除 Logo</md-text-button>
     <md-outlined-text-field data-f="bname" label="名称" value="${escAttr(brandState.name)}"></md-outlined-text-field>
     <md-outlined-text-field data-f="bver" label="副标题(留空隐藏)" value="${escAttr(brandState.ver)}"></md-outlined-text-field>
-  </div>`, {onOk:()=>{
+  </div>`, {okText:'保存', onOk:()=>{
     const v=dlgValue();
     const name=String(v.bname||'').trim()||'OpenAGW', ver=String(v.bver||'').trim();
-    applyBrand({name,ver});
-    try{ localStorage.setItem('agw-brand',JSON.stringify({name,ver})); }catch(_){}
-    snack('页面名称已更新');
+    const logo=brandLogoSrc()||'';
+    try{ localStorage.setItem('agw-brand',JSON.stringify({name,ver,logo})); }
+    catch(e){ snack('保存失败: 浏览器存储空间不足, 请换一个更小的 Logo',true); return false; }
+    applyBrand({name,ver,logo});
+    snack('品牌已更新');
     return true;
   }});
+  brandSyncLogo();
+  $('#brandLogoPick')?.addEventListener('click',()=>$('#brandLogoFile')?.click());
+  $('#brandLogoClear')?.addEventListener('click',()=>{ brandDraft=null; brandLogoCleared=true; brandSyncLogo(); });
+  $('#brandLogoFile')?.addEventListener('change',async e=>{
+    const input=e.target, f=input.files&&input.files[0]; if(!f) return;
+    const hint=$('#brandLogoHint'); if(hint) hint.textContent='正在处理 Logo…';
+    try{
+      brandDraft=await brandPrepareLogo(f);
+      brandLogoCleared=false;
+      brandSyncLogo();
+    }catch(err){ snack(err.message||'Logo 处理失败',true); brandSyncLogo(); }
+    try{ input.value=''; }catch(_){}
+  });
 }
 loadBrand();
 $('#railBrand').addEventListener('click', openBrandDialog);

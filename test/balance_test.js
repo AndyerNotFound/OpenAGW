@@ -173,6 +173,12 @@ function readCfg(file) {
   eq(rV1Credits.json && rV1Credits.json.balance, '42.50', '/v1/credits 保留 balance 原值');
   const rV1CreditsAuto = await get(port, '/v1/credits', H);
   eq(rV1CreditsAuto.status, 200, '/v1/credits 不传 ch 也 200');
+// Panel route end-to-end: the provider page reads every channel balance in one request
+  const rPanel = await get(port, '/admin/api/balances/default', { 'x-agw-token': 'test-admin' });
+  eq(rPanel.status, 200, 'HTTP /admin/api/balances/:inst 200');
+  ok(Array.isArray(rPanel.json && rPanel.json.items) && rPanel.json.items.length === 5, 'HTTP 批量余额: 每个渠道一条');
+  const rPanelItem = rPanel.json && rPanel.json.items.find(i => i.channel === 'relay-custom');
+  eq(rPanelItem && String(rPanelItem.balance), '42.50', 'HTTP 批量余额: 取值正确');
 
 /* ============ 4b. Multi-channel aggregation + FX conversion ============ */
   console.log('── Part 4b: 多渠道聚合(汇率统一单位) ──');
@@ -230,7 +236,7 @@ function readCfg(file) {
 /* ============ 5. Admin side + panel saves must not wipe fields ============ */
   console.log('── Part 5: 管理端余额路由 + 面板保存防抹 ──');
   adminMod.setDir(tmpDir);
-  adminMod.setBalanceFn((c, ch, cb) => G.fetchChannelBalance(c, ch, cb));
+  adminMod.setBalanceFn((c, ch, cb) => G.fetchChannelBalance(c, ch, cb), { cached: G.fetchBalanceCached, target: G.balanceTarget });
   const reloads = [];
   adminMod.setPool({ reload: (n) => reloads.push(n) });
   const res1 = fakeRes();
@@ -242,6 +248,26 @@ function readCfg(file) {
   await adminMod.handleAdmin(lc, fakeReq(), res2, new URL('http://x/admin/api/balance/default/relay-plain'), '/admin/api/balance/default/relay-plain', '');
   await waitRes(res2);
   eq(res2.status, 400, 'admin 余额路由: 无预设 → 400');
+// Panel provider cards: one batched call carries every channel (cached, and "no balance endpoint" is a
+// noTarget flag rather than a failure, so the panel can drop that card's badge instead of showing an error)
+  const resB = fakeRes();
+  await adminMod.handleAdmin(lc, fakeReq(), resB, new URL('http://x/admin/api/balances/default'), '/admin/api/balances/default', '');
+  await waitRes(resB);
+  eq(resB.status, 200, 'admin 批量余额 200');
+  const bItems = (resB.json() || {}).items || [];
+  eq(bItems.length, 5, 'admin 批量余额: 每个渠道一条');
+  const bCustom = bItems.find(i => i.channel === 'relay-custom');
+  eq(bCustom && bCustom.ok, true, 'admin 批量余额: 配了余额接口的渠道 ok');
+  eq(bCustom && String(bCustom.balance), '42.50', 'admin 批量余额: 取值与单查一致');
+  eq(bCustom && bCustom.unit, 'CNY', 'admin 批量余额: 带单位');
+  ok(bItems.find(i => i.channel === 'relay-plain')?.noTarget === true, 'admin 批量余额: 无余额接口的渠道标 noTarget');
+  const bProxy = bItems.find(i => i.channel === 'relay-proxy');
+  ok(bProxy && bProxy.ok === false && /失败|代理/.test(bProxy.error || ''), 'admin 批量余额: 查不通的渠道单独带原因');
+  const hitsBatch = up.hits.length;
+  const resB2 = fakeRes();
+  await adminMod.handleAdmin(lc, fakeReq(), resB2, new URL('http://x/admin/api/balances/default'), '/admin/api/balances/default', '');
+  await waitRes(resB2);
+  eq(up.hits.length, hitsBatch, 'admin 批量余额: 成功结果走缓存, 再打开一次不再打上游');
 // Old panels (unaware of the balance trio) saving a channel -> the fields must be preserved
   const res3 = fakeRes();
   const bodyOld = JSON.stringify({ name: 'relay-custom', type: 'openai', baseUrl: `http://127.0.0.1:${up.port}`, proxy: '-', models: ['m2'], apiKey: '', default: true, useResponses: false, probe: false });

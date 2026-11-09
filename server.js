@@ -11,7 +11,7 @@ const zlib = require('zlib');
 const { poolRoute, BILLING_PATHS, GENERIC_BALANCE_PATHS, createInstancePool, poolLoadAll, setupModelSync, statsFlushFile, setupStatsFlush } = require('./pool');
 const { sendError, corsHeaders, jsonErr, checkAuth, keyCreditsJSON, genApiKey, persistRuntimeCfg, availableBranches, collectJson, modelsResponse, sendJson, loadKeyUsage, makeGatewayApi } = require('./router');
 const { VERSION, utf8, log, logErr } = require('./util');
-const { balanceAggregate, pickBalanceChannel, fetchBalanceCached, fetchChannelBalance, setupProbe } = require('./upstream');
+const { balanceAggregate, pickBalanceChannel, fetchBalanceCached, fetchChannelBalance, balanceTarget, setupProbe } = require('./upstream');
 const { fetchUpstreamModels, syncModels } = require('./sync');
 const { handleExtraEndpoint } = require('./passthrough');
 const { handleChat } = require('./record');
@@ -369,7 +369,7 @@ function startServer(cfg, opts = {}) {
     admin.setPool(pool);
     admin.setUpstreamModels((ch, inst) => fetchUpstreamModels((inst && pool.instances.get(inst)) || cfg, ch));
     admin.setSyncFn((inst) => syncModels((inst && pool.instances.get(inst)) || cfg));
-    admin.setBalanceFn((c, ch, cb) => fetchChannelBalance(c, ch, cb));
+    admin.setBalanceFn((c, ch, cb) => fetchChannelBalance(c, ch, cb), { cached: fetchBalanceCached, target: balanceTarget });
     poolLoadAll(pool, cfg);
     log(`OpenAGW v${VERSION} 就绪 (多实例单进程模式):`);
     log(`  主端口 ${pool.mainHost}:${pool.mainPort}${pool.mainTlsPort ? ' (https:' + pool.mainTlsPort + ')' : ''}  →  /实例名/v1/... 访问对应实例, 无前缀 = default`);
@@ -389,7 +389,7 @@ function startServer(cfg, opts = {}) {
   try { panelAuth.ensure(cfg); } catch (e) { logErr('[panel] 初始化登录状态失败: ' + e.message); }
   admin.setUpstreamModels(ch => fetchUpstreamModels(cfg, ch));
   admin.setSyncFn(() => syncModels(cfg));
-  admin.setBalanceFn((c, ch, cb) => fetchChannelBalance(c, ch, cb));
+  admin.setBalanceFn((c, ch, cb) => fetchChannelBalance(c, ch, cb), { cached: fetchBalanceCached, target: balanceTarget });
   setupModelSync(cfg);
   loadKeyUsage(cfg);
   setupProbe(cfg);

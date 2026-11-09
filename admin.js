@@ -34,8 +34,14 @@ function setUpstreamModels(fn) { upstreamModelsFn = fn; } // injected by gateway
 let syncFn = null;
 function setSyncFn(fn) { syncFn = fn; } // injected by gateway: (instance?) -> Promise<sync summary>
 //// channel balance lookup implementation: injected by gateway (cfg, ch, cb) -- uses the channel proxy/insecure; see gateway.js fetchChannelBalance
-let BALANCE_FN = null;
-function setBalanceFn(fn) { BALANCE_FN = fn; }
+//// opts.cached: the same lookup behind the short client cache (used by the batched panel call)
+//// opts.target: ch -> balanceTarget|null, so a batch can skip channels that have no balance endpoint at all
+let BALANCE_FN = null, BALANCE_CACHED = null, BALANCE_TARGET = null;
+function setBalanceFn(fn, opts) {
+  BALANCE_FN = fn;
+  BALANCE_CACHED = (opts && opts.cached) || null;
+  BALANCE_TARGET = (opts && opts.target) || null;
+}
 // Multi-instance pool (single-process mode), injected by gateway; null = single-instance run
 let POOL = null;
 function setPool(p) { POOL = p; }
@@ -1822,6 +1828,35 @@ expireAt: c.adminExpireAt || 0,      // panel session expiry (agw admin expire)
 
 // ============ Channel balance proxy lookup ============
 // Implementation injected by gateway.js (setBalanceFn): uses the channel proxy/insecure/timeouts; presets + channel-level balanceUrl/balancePath/balanceUnit overrides
+
+// GET /admin/api/balances/:inst -- every channel's balance in one request (panel provider cards).
+// Channels without a balance endpoint are reported as noTarget instead of failing the call, and
+// successes ride the same short cache the client balance endpoints use (cfg.balanceCacheSec).
+  if (req.method === 'GET' && api.startsWith('balances/')) {
+    const name = decodeURIComponent(api.slice('balances/'.length));
+    const c = loadCfg(name);
+    if (!c) return jsonRes(res, 404, { error: '实例不存在' });
+    const lookup = BALANCE_CACHED || BALANCE_FN;
+    if (!lookup) return jsonRes(res, 500, { error: '余额查询未就绪(网关未注入实现, 请重启网关)' });
+    const chs = (c.channels || []).filter(x => !x._disabled);
+    if (!chs.length) return jsonRes(res, 200, { ok: true, items: [] });
+    const items = new Array(chs.length);
+    let left = chs.length, sent = false;
+    const finish = () => { if (!sent) { sent = true; jsonRes(res, 200, { ok: true, items }); } };
+    chs.forEach((ch, i) => {
+      const hit = () => { if (--left === 0) finish(); };
+      if (BALANCE_TARGET && !BALANCE_TARGET(ch)) { items[i] = { channel: ch.name, ok: false, noTarget: true }; return hit(); }
+      try {
+        lookup(c, ch, (r) => {
+          items[i] = r && r.ok
+            ? { channel: ch.name, ok: true, balance: r.balance, unit: r.unit || '', url: r.url }
+            : { channel: ch.name, ok: false, error: (r && r.error) || '余额查询失败' };
+          hit();
+        });
+      } catch (e) { items[i] = { channel: ch.name, ok: false, error: e.message }; hit(); }
+    });
+    return;
+  }
 // GET /admin/api/balance/:inst/:ch -- proxy-lookup a channel balance (uses the channel apiKey)
   if (req.method === 'GET' && api.startsWith('balance/')) {
     const rest = api.slice('balance/'.length);
