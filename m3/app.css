@@ -462,6 +462,13 @@ md-filled-card{
 /* Footer buttons stay compact: the global rule pins min-width:64px + 16px padding, too wide for a phone row */
 .card-item-acts md-outlined-button,.card-item-acts md-text-button,.card-item-acts md-filled-button{
   min-width:0!important;padding:0 8px!important}
+.perm-title{font-size:10px;font-weight:600;color:var(--md-sys-color-on-surface-variant);margin-top:2px}
+.perm-hint{font-weight:400;opacity:.8;margin-left:4px}
+.perm-box{display:flex;flex-wrap:wrap;gap:4px 10px;max-height:150px;overflow-y:auto;border:1px solid var(--md-sys-color-outline-variant);border-radius:12px;padding:8px}
+.perm-item{display:flex;align-items:center;gap:4px;font-size:10px;min-width:0}
+.perm-item input{accent-color:var(--md-sys-color-primary);width:14px;height:14px;margin:0;flex:none}
+.perm-item span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px}
+.perm-empty{font-size:10px;color:var(--md-sys-color-on-surface-variant)}
 .empty{padding:32px 8px;text-align:center;color:var(--md-sys-color-on-surface-variant)}
 .tag{display:inline-block;font-size:8px;font-weight:600;padding:2px 4px;border-radius:4px;text-transform:uppercase;letter-spacing:.04em}
 .tag.openai{background:#10A37F;color:#fff}.tag.claude{background:#D97757;color:#fff}.tag.gemini{background:#4285F4;color:#fff}
@@ -476,7 +483,35 @@ md-filled-card{
 .pv-setdef:hover{text-decoration:underline;text-decoration-color:var(--md-sys-color-primary)}
 .rec-pre{max-height:36vh;overflow:auto;background:var(--md-sys-color-surface-container);border:1px solid var(--md-sys-color-outline-variant);padding:8px;border-radius:8px;font-size:10px;white-space:pre-wrap;word-break:break-all;margin:4px 0}
 .rec-meta{font-size:10px;color:var(--md-sys-color-on-surface-variant);margin-bottom:4px}
-.rp-help summary{cursor:pointer;padding:4px 0;font-size:11px;font-weight:500}
+/* ============ Expand / collapse (animated) ============
+   Was <details>, which snaps open and shut with no transition. The head is now a real button and the
+   body is height-animated by xcToggle() in app.js; prefers-reduced-motion skips the animation. */
+.xc{display:flex;flex-direction:column;min-width:0}
+.xc-head{display:flex;align-items:center;gap:6px;width:100%;padding:6px 0;border:none;background:none;
+  font-family:inherit;font-size:11px;font-weight:500;color:var(--md-sys-color-on-surface);text-align:left;cursor:pointer}
+.xc-head:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:1px;border-radius:6px}
+.xc-cue{font-size:16px;line-height:1;color:var(--md-sys-color-on-surface-variant);
+  transition:transform .24s cubic-bezier(.2,0,0,1)}
+.xc.open .xc-cue{transform:rotate(180deg)}
+.xc-body{overflow:hidden}
+.xc-body[hidden]{display:none}
+.lg-slider{display:flex;flex-direction:column;gap:2px;margin:2px 0 10px}
+.lg-slider-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;font-size:11px}
+.lg-slider-val{font-weight:600;color:var(--md-sys-color-primary);font-variant-numeric:tabular-nums}
+.lg-slider-scale{display:flex;justify-content:space-between;font-size:9px;color:var(--md-sys-color-on-surface-variant)}
+.lg-slider input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:24px;margin:0;
+  background:transparent;accent-color:var(--md-sys-color-primary);touch-action:pan-y}
+.lg-slider input[type=range]::-webkit-slider-runnable-track{height:4px;border-radius:2px;
+  background:var(--md-sys-color-surface-container-highest)}
+.lg-slider input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:18px;height:18px;
+  margin-top:-7px;border:none;border-radius:50%;background:var(--md-sys-color-primary);
+  box-shadow:0 1px 4px rgba(0,0,0,.35)}
+.lg-slider input[type=range]::-moz-range-track{height:4px;border-radius:2px;background:var(--md-sys-color-surface-container-highest)}
+.lg-slider input[type=range]::-moz-range-thumb{width:18px;height:18px;border:none;border-radius:50%;
+  background:var(--md-sys-color-primary)}
+.lg-slider input[type=range]:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:4px;border-radius:4px}
+/* 1D / 1H / 1M switch under the card head: one row, left aligned, never wraps on a phone */
+.gran-tabs{margin:0 0 var(--agw-sp)}
 .rp-help table{width:100%;border-collapse:collapse;font-size:10px;margin:4px 0}
 .rp-help td,.rp-help th{border:1px solid var(--md-sys-color-outline-variant);padding:4px;text-align:left}
 .rp-help td:first-child{font-family:monospace;white-space:nowrap}
@@ -608,7 +643,7 @@ md-list-item{--md-list-item-one-line-container-height:44px;
 @font-face{
   font-family:'Material Symbols Outlined';
   font-style:normal;font-weight:400;
-  src:url('/auth/vendor/material-symbols-outlined.woff2') format('woff2');
+  src:url('vendor/material-symbols-outlined.woff2') format('woff2');
   font-display:block}
 /* Word-form icon classes for non-md-icon cases (logo/avatar/small icons inside tags) */
 .msym{font-family:'Material Symbols Outlined';font-weight:normal;font-style:normal;

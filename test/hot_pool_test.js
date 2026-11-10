@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 // ================= Hot restart in multi-instance pool mode =================
 //// One master + worker hosting default (main port) + a second instance on its own compat port.
 //// Swapping the worker must keep both ports listening and both in-flight streams intact.
@@ -12,6 +13,7 @@ const P1 = Number(process.env.P1 || 39031), P2 = Number(process.env.P2 || 39032)
 const CHUNKS = 30, DELAY = 60;
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agw-hotpool-'));
 const cfgDir = path.join(dir, 'cfg');
+require('./_surface').useDir(cfgDir);
 fs.mkdirSync(cfgDir, { recursive: true });
 const chans = [{ name: 'up', type: 'openai', baseUrl: 'http://127.0.0.1:' + UP, apiKey: 'sk-up', models: ['hot-model'], default: true }];
 fs.writeFileSync(path.join(cfgDir, 'config.json'), JSON.stringify({ listen: { host: '127.0.0.1', port: P1 }, panel: { openBrowser: false }, modelSync: { enable: false }, channels: chans }));

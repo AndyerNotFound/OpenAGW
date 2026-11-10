@@ -1,6 +1,6 @@
 // ============ Material Web component library (local vendor, zero external deps) ============
 // Note: this bundle fully inlines lit with no bare module references, so browsers can load it directly.
-const MW_OK = await import('/auth/vendor/mw-v2.js').then(()=>true).catch(e=>{
+const MW_OK = await import('./vendor/mw-v2.js').then(()=>true).catch(e=>{
   console.error('[MW] 组件库加载失败:', e); return false;
 });
 
@@ -78,7 +78,13 @@ class BaseAdapter{
     try{ res = await fetch(url, {...opts, signal}); }
     catch(e){ if(e.name==='AbortError') throw e;
       throw new Error('无法连接到 ' + url.split('/admin/api/')[0] + ' (实例可能未运行或正在重启中)'); }
-if(res.status===401) openKeyDialog(); // missing/wrong password: open the input dialog
+if(res.status===401){ // session gone (or a wrong token): the login page is the only re-entry
+  if(!localStorage.getItem('agw-admin-key') && !window.__agwAuthRedirect){
+    window.__agwAuthRedirect=true;
+    const m=location.pathname.match(/^\/([A-Za-z0-9_-]{16,128})\/admin(?:\/|$)/);
+    location.replace((m?'/'+m[1]+'/admin':'')+'/login');
+  } else openKeyDialog();
+}
     if(!res.ok){
 // Best-effort parse {error:{message}} / {error:"..."} into readable text (balance failures must show why)
       let msg='';
@@ -95,8 +101,8 @@ if(res.status===401) openKeyDialog(); // missing/wrong password: open the input 
 class HttpAdapter extends BaseAdapter{
   constructor(base){
     super();
-    const pm=location.pathname.match(/^\/([A-Za-z0-9_-]{1,32})\/auth(?:\/|$)/);
-    const prefix=pm?'/'+pm[1]:'';
+    const pm=location.pathname.match(/^\/([A-Za-z0-9_-]{16,128})\/admin(?:\/|$)/);
+    const prefix=pm?'/'+pm[1]:''; // base + '/admin/api/...' rebuilds /<sid>/admin/api/...
     this.base=(base||(location.origin+prefix)).replace(/\/$/,'');
   }
   _hdr(){ const h={'Content-Type':'application/json'}; const k=localStorage.getItem('agw-admin-key'); if(k)h['x-agw-token']=k; return h; }
@@ -134,6 +140,8 @@ await new Promise(r=>setTimeout(r,3500)); // let the old process exit and the ne
   async revokeWebSession(sid,signal){ return this._fetch(`${this.base}/admin/api/web-expired`,{method:'POST',headers:this._hdr(),body:JSON.stringify(sid?{sid}:{})},signal); }
   async setAdminExpire(at,signal){ return this._fetch(`${this.base}/admin/api/admin-expire`,{method:'POST',headers:this._hdr(),body:JSON.stringify({at:Number(at)||0})},signal); }
   async getMdu(signal){ return this._fetch(`${this.base}/admin/api/mdu`,{headers:this._hdr()},signal); }
+  async getLogCfg(name,signal){ return this._fetch(`${this.base}/admin/api/log-cfg/${encodeURIComponent(name)}`,{headers:this._hdr()},signal); }
+  async saveLogCfg(name,body,signal){ return this._fetch(`${this.base}/admin/api/log-cfg/${encodeURIComponent(name)}`,{method:'POST',headers:this._hdr(),body:JSON.stringify(body)},signal); }
   async getStats(name,signal){ return this._fetch(`${this.base}/admin/api/stats?instance=${encodeURIComponent(name)}`,{headers:this._hdr()},signal); }
   async getLogs(name,lines,signal){ const r=await fetch(`${this.base}/admin/api/logs/${encodeURIComponent(name)}?lines=${lines}`,{headers:this._hdr(),signal}); if(!r.ok) throw new Error(await r.text().catch(()=>'')); return r.text(); }
   async getRequests(name,signal){ return this._fetch(`${this.base}/admin/api/requests/${encodeURIComponent(name)}`,{headers:this._hdr()},signal); }
@@ -162,18 +170,19 @@ const VIEWS = [
   {id:'stats',    label:'统计',   icon:'bar_chart'},
   {id:'logs',     label:'日志',   icon:'description'},
   {id:'keys',     label:'密钥',   icon:'key'},
-  {id:'cards',    label:'卡密',   icon:'confirmation_number'},
+  {id:'cards',    label:'用户',   icon:'confirmation_number'},
   {id:'ports',    label:'端口',   icon:'power'},
   {id:'session',  label:'会话',   icon:'devices'},
   {id:'replace',  label:'替换',   icon:'find_replace'},
 ];
-const TITLES = {overview:'首页',announce:'公告',providers:'提供商',routing:'路由策略',keys:'API 密钥',cards:'卡密管理',ports:'服务端口',session:'面板会话',replace:'文本替换',stats:'统计',logs:'日志'};
+const TITLES = {overview:'首页',announce:'公告',providers:'提供商',routing:'路由策略',keys:'API 密钥',cards:'用户与卡密',ports:'服务端口',session:'面板会话',replace:'文本替换',stats:'统计',logs:'日志'};
 const Store = {
   page:'overview', instances:[], configs:new Map(), aborts:new Map(), timer:null,
   online:navigator.onLine, currentName:'',
   inst:'default',
   charts:null,
   chartMode:{daily:'bar',model:'bar',dist:'hbar'},
+  gran:'1D',
   abort(key){ const c=this.aborts.get(key); if(c){ try{c.abort();}catch(e){} }
     const n=new AbortController(); this.aborts.set(key,n); return n.signal; },
   armTimeout(key,ms,onFire){ const c=this.aborts.get(key); if(!c) return ()=>{};
@@ -250,6 +259,43 @@ const PAGE_PUSH_MS = 280;
 let navSeq = 0;
 const waitMs = ms => new Promise(r=>setTimeout(r,ms));
 function reducedMotion(){ try{ return matchMedia('(prefers-reduced-motion: reduce)').matches; }catch(_){ return false; } }
+/* ============ Expand / collapse (animated) ============
+ * Replaces <details>, which snaps open and shut with no transition. The head is a real button; the body
+ * is measured and height-animated so the card grows into view, then the inline styles are cleared (the
+ * body goes back to being auto-heighted, never stuck at a stale pixel height). reducedMotion skips it. */
+const XC_MS = 240;
+function xcToggle(head, force){
+  const wrap=head.closest('[data-xc]'); if(!wrap) return;
+  const body=wrap.querySelector('.xc-body'); if(!body) return;
+  const wasOpen=wrap.classList.contains('open');
+  const open=force==null?!wasOpen:!!force;
+  if(open===wasOpen && !body._xcBusy) return;
+  head.setAttribute('aria-expanded', open?'true':'false');
+  wrap.classList.toggle('open', open);
+  clearTimeout(body._xcT);
+  if(reducedMotion()){
+    body.style.height=''; body.style.opacity=''; body.style.transition=''; body.style.overflow='';
+    body.hidden=!open; body._xcBusy=false; return;
+  }
+  // Start from the height actually on screen: 0 when it is closed, the live pixel height when it is
+  // open or still moving (a tap in the middle of an animation then reverses instead of jumping).
+  const from=body.hidden?0:body.getBoundingClientRect().height;
+  body.hidden=false;
+  body.style.transition='none'; body.style.height='auto'; body.style.overflow='hidden';
+  const natural=body.getBoundingClientRect().height;
+  body.style.height=from+'px';
+  if(open) body.style.opacity='0';
+  void body.offsetHeight;
+  body._xcBusy=true;
+  body.style.transition=`height ${XC_MS}ms cubic-bezier(.2,0,0,1), opacity ${XC_MS}ms ease`;
+  body.style.height=(open?natural:0)+'px';
+  body.style.opacity=open?'1':'0';
+  body._xcT=setTimeout(()=>{
+    body.style.transition=''; body.style.height=''; body.style.overflow=''; body.style.opacity='';
+    if(!open) body.hidden=true;
+    body._xcBusy=false;
+  }, XC_MS+20);
+}
 function viewIdx(id){ return VIEWS.findIndex(v=>v.id===id); }
 function clearPageFx(el){ if(!el) return; el.classList.remove('push','out','in','rev','is-out','is-in'); }
 function hidePageEl(el){ if(!el) return; clearPageFx(el); el.hidden=true; el.classList.add('hidden'); }
@@ -837,13 +883,78 @@ function renderTunnel(d){
 }
 
 // ============ Render: key card management ============
+// A card is one user: quota + expiry + role + rate limits (RPM/TPM) + instance/provider/model
+// whitelists. Editing always writes the complete permission set, so clearing a checkbox really
+// removes that permission instead of leaving a stale value behind.
+let cardCache = [];
 function fmtTok(n){ return shortNum(n); }
+function splitList(s){ return [...new Set(String(s||'').split(/[,，\n]+/).map(x=>x.trim()).filter(Boolean))]; }
+function cardPermBox(field, options, selected){
+  const sel=Array.isArray(selected)?selected:[];
+  const all=Array.isArray(options)?options.slice():[];
+  for(const x of sel) if(x && !all.includes(x)) all.push(x);
+  const rows=all.length?all.map(o=>`<label class="perm-item" title="${escAttr(o)}"><input type="checkbox" value="${escAttr(o)}" ${sel.includes(o)?'checked':''}><span>${esc(o)}</span></label>`).join('')
+    :'<span class="perm-empty">暂无可选项</span>';
+  return `<div class="perm-box" data-perm="${field}">${rows}</div>`;
+}
+function permChecked(field){
+  return $$(`#dlgBody [data-perm="${field}"] input:checked`).map(i=>i.value);
+}
+function cardDialogHtml(k){
+  const cfg=Store.configs.get(Store.inst)||{};
+  const insts=(Store.instances||[]).map(i=>i.name);
+  const chs=(cfg.channels||[]).map(c=>c.name);
+  const chExtra=(k&&k.channels||[]).filter(x=>!chs.includes(x));
+  const quota=Number(k&&k.quotaTokens||0);
+  const role=k&&k.role==='admin'?'admin':'user';
+  return `
+    <div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
+      <md-outlined-text-field data-f="name" label="名称(给谁用的)" value="${escAttr(k&&k.name||'')}" required></md-outlined-text-field>
+      <md-outlined-select data-f="role" label="角色" helper="用户卡调用 API; 管理卡只能进管理 API">
+        <md-select-option value="user" ${role!=='admin'?'selected':''}>用户卡 (调用 API)</md-select-option>
+        <md-select-option value="admin" ${role==='admin'?'selected':''}>管理卡 (管理 API)</md-select-option>
+      </md-outlined-select>
+      <md-outlined-text-field data-f="quotaWan" label="额度(万 tokens)" type="number" value="${quota?String(quota/10000):'0'}" helper="0 或留空=不限量; 100 = 100万 tokens"></md-outlined-text-field>
+      <div class="grid-form">
+        <md-outlined-text-field data-f="rpm" label="RPM (次/分钟)" type="number" value="${Number(k&&k.rpm)||0}" helper="0=不限; 60 秒滑动窗口"></md-outlined-text-field>
+        <md-outlined-text-field data-f="tpm" label="TPM (tokens/分钟)" type="number" value="${Number(k&&k.tpm)||0}" helper="0=不限; 按输入+输出计"></md-outlined-text-field>
+      </div>
+      <md-outlined-text-field data-f="expiresAt" label="有效期(留空=永久)" value="${escAttr(k&&k.expiresAt||'')}" placeholder="2026-12-31" helper="到期自动拒绝; 支持 YYYY-MM-DD"></md-outlined-text-field>
+      <div class="perm-title">实例权限 <span class="perm-hint">不勾选 = 仅发卡实例; 跨实例需勾选目标</span></div>
+      ${cardPermBox('branches', insts, k&&k.branches)}
+      <div class="perm-title">提供商权限 <span class="perm-hint">不勾选 = 当前实例全部提供商</span></div>
+      ${cardPermBox('channels', chs, k&&k.channels)}
+      <md-outlined-text-field data-f="channelsExtra" label="额外提供商(逗号分隔, 可留空)" value="${escAttr(chExtra.join(', '))}" helper="其他实例的提供商名或 * 通配; 与上方勾选合并"></md-outlined-text-field>
+      <md-outlined-text-field data-f="models" label="模型权限(逗号分隔)" value="${escAttr((k&&k.models||[]).join(', '))}" helper="留空=全部; 支持 * 通配, 例如 gpt-4*"></md-outlined-text-field>
+      <md-outlined-text-field data-f="note" label="备注(可选)" value="${escAttr(k&&k.note||'')}"></md-outlined-text-field>
+    </div>`;
+}
+function cardBodyFromDialog(key){
+  const v=dlgValue();
+  const quotaWan=Number(v.quotaWan)||0;
+  const limit=v=>Math.max(0,Math.floor(Number(v)||0));
+  return {
+    key,
+    name:String(v.name||'').trim(),
+    role:v.role==='admin'?'admin':'user',
+    quotaTokens:Math.round(quotaWan*10000),
+    rpm:limit(v.rpm), tpm:limit(v.tpm),
+    models:splitList(v.models),
+    channels:[...new Set([...permChecked('channels'), ...splitList(v.channelsExtra)])],
+    branches:permChecked('branches'),
+    expiresAt:String(v.expiresAt||'').trim(),
+    note:String(v.note||'').trim(),
+  };
+}
 async function renderCards(){
   const signal=Store.abort('cards');
+  const cur=await fillInstSelect($('#topInst'), Store.inst, signal); Store.inst=cur;
   try{
-    const data=await adapter.getKeys(Store.inst,signal);
+    const [data,cfg]=await Promise.all([adapter.getKeys(cur,signal), adapter.getConfig(cur,signal)]);
+    Store.configs.set(cur,cfg);
     const keys=data.keys||[];
-    if(!keys.length){ $('#cd-list').innerHTML='<div class="empty" style="padding:24px;text-align:center;color:var(--md-sys-color-on-surface-variant)">暂无卡密 · 点右上角「发卡」给朋友发一个</div>'; return; }
+    cardCache=keys;
+    if(!keys.length){ $('#cd-list').innerHTML='<div class="empty" style="padding:24px;text-align:center;color:var(--md-sys-color-on-surface-variant)">暂无用户卡 · 点右上角「发卡」给朋友发一个</div>'; return; }
     $('#cd-list').innerHTML=keys.map(k=>{
       const quota=k.quotaTokens||0, used=k.usedTokens||0;
       const pct=quota>0?Math.min(100,Math.round(used/quota*100)):0;
@@ -853,17 +964,35 @@ async function renderCards(){
       else if(k.expiresAt && new Date(k.expiresAt).getTime()<Date.now()){ state='已过期'; stateColor=ERROR_COLOR; }
       else if(quota>0&&used>=quota){ state='已用尽'; stateColor=ERROR_COLOR; }
       else { state='启用中'; stateColor='var(--md-sys-color-primary)'; }
-      const limits=[k.models&&k.models.length?`限模型 ${k.models.join('/')}`:null, k.expiresAt?`${String(k.expiresAt).slice(0,10)}到期`:null].filter(Boolean).join(' · ');
+      const lim=[];
+      if(k.rpm) lim.push('RPM '+k.rpm+'/分');
+      if(k.tpm) lim.push('TPM '+fmtTok(k.tpm)+'/分');
+      const limTxt=lim.length?lim.join(' · '):'不限流';
+      const now=[];
+      if(k.rpm) now.push('RPM '+(k.rpmUsed||0)+'/'+k.rpm);
+      if(k.tpm) now.push('TPM '+fmtTok(k.tpmUsed||0)+'/'+fmtTok(k.tpm));
+      const nowTxt=now.length?('本分钟 '+now.join(' · ')):'';
+      const perm=[
+        '实例 '+((k.branches&&k.branches.length)?k.branches.join('/'):('仅 '+Store.inst)),
+        '提供商 '+((k.channels&&k.channels.length)?k.channels.join('/'):'全部'),
+        '模型 '+((k.models&&k.models.length)?k.models.join('/'):'全部'),
+      ];
+      const permTxt=perm.slice(0,2).join(' · '), modelTxt=perm[2];
+      const expireTxt=k.expiresAt?`${String(k.expiresAt).slice(0,10)}到期`:null;
       return cardItem({
         dot:stateColor===ERROR_COLOR?'err':'ok',
         name:k.name||'(无名卡)',
         tags:`<span class="tag" style="color:${k.role==='admin'?'var(--md-sys-color-tertiary)':stateColor}">${k.role==='admin'?'管理':state}</span>`,
         lines:[
-          `<span class="mono">${esc(k.key.slice(0,10))}…</span> · 用量 ${fmtTok(used)}${quota>0?' / '+fmtTok(quota)+' ('+pct+'%)':'(不限额)'}`,
-          limits?esc(limits):'',
+          `<span class="mono">${esc(k.key.slice(0,10))}…</span> · 用量 ${fmtTok(used)}${quota>0?' / '+fmtTok(quota)+' ('+pct+'%)':'(不限额)'} · ${esc(limTxt)}`,
+          nowTxt?esc(nowTxt):'',
+          esc(permTxt),
+          esc(modelTxt),
+          expireTxt?esc(expireTxt):'',
           k.note?('备注 '+esc(k.note)):'',
         ],
         acts:`<md-text-button data-action="copyKey" data-key="${escAttr(k.key)}">复制</md-text-button>
+          <md-text-button data-action="editKey" data-key="${escAttr(k.key)}">编辑</md-text-button>
           <md-text-button data-action="toggleKey" data-key="${escAttr(k.key)}" data-on="${k.enable?1:0}">${k.enable?'禁用':'启用'}</md-text-button>
           <md-text-button data-action="rechargeKey" data-key="${escAttr(k.key)}" data-name="${escAttr(k.name||'')}">充值</md-text-button>
           <md-text-button data-action="delKey" data-key="${escAttr(k.key)}" data-name="${escAttr(k.name||'')}" style="color:var(--md-sys-color-error)">删除</md-text-button>`,
@@ -873,39 +1002,45 @@ async function renderCards(){
 }
 // ---- Key-issuing dialog ----
 async function openCardDialog(){
-  openDialog('发新卡 (实例 '+Store.inst+')', `
-    <div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
-      <md-outlined-text-field data-f="name" label="名称(给谁用的)" required></md-outlined-text-field>
-      <md-outlined-text-field data-f="quotaWan" label="额度(万 tokens)" type="number" value="100" helper="0 或留空=不限量; 100 = 100万tokens"></md-outlined-text-field>
-      <md-outlined-text-field data-f="models" label="限定模型(逗号分隔, 留空=全部可用)" helper="例如 deepseek-chat, gpt-4o-mini"></md-outlined-text-field>
-      <md-outlined-text-field data-f="expiresAt" label="有效期(留空=永久)" placeholder="2026-12-31" helper="到期自动拒绝; 支持 YYYY-MM-DD"></md-outlined-text-field>
-      <md-outlined-text-field data-f="note" label="备注(可选)"></md-outlined-text-field>
-    </div>`, {onOk:async ()=>{
-      const v=dlgValue();
-      if(!String(v.name||'').trim()){ snack('名称必填',true); return false; }
-      const quotaWan=Number(v.quotaWan)||0;
-      const body={ name:String(v.name).trim(), role:document.getElementById('ed-role').value, quotaTokens:Math.round(quotaWan*10000),
-        models:String(v.models||'').split(',').map(s=>s.trim()).filter(Boolean),
-        expiresAt:String(v.expiresAt||'').trim(), note:String(v.note||'').trim() };
-      try{
-        const r=await adapter.createKey(Store.inst,body);
-        const k=r.key||{};
-        openDialog('发卡成功', `<div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
-          <div style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">完整 Key (配置里可查, 也可随时回来复制):</div>
-          <div class="mono" style="word-break:break-all;background:var(--md-sys-color-surface-container);padding:8px;border-radius:10px;user-select:all">${esc(k.key||'')}</div>
-          <div style="font-size:10px">客户端用法: base_url 填 <span class="mono">http://&lt;网关地址&gt;:${Store.mainPort||'主端口'}/${esc(Store.inst==='default'?'':Store.inst+'/')}v1</span>（末尾 /v1 可省略）, API Key 填上面的 Key</div>
-          <md-filled-button id="cd-copy-new">复制 Key</md-filled-button>
-        </div>`, {hideCancel:true});
-        setTimeout(()=>{ const b=$('#cd-copy-new'); if(b) b.onclick=()=>{ navigator.clipboard&&navigator.clipboard.writeText(k.key||''); snack('已复制'); }; },50);
-        renderCards();
-      }catch(e){ snack(e.message,true); return false; }
-      return true;
-    }});
+  if(!Store.configs.get(Store.inst)){
+    try{ Store.configs.set(Store.inst, await adapter.getConfig(Store.inst)); }catch(e){}
+  }
+  openDialog('发新卡 (实例 '+Store.inst+')', cardDialogHtml(null), {onOk:async ()=>{
+    const body=cardBodyFromDialog(undefined);
+    if(!body.name){ snack('名称必填',true); return false; }
+    try{
+      const r=await adapter.createKey(Store.inst,body);
+      const k=r.key||{};
+      openDialog('发卡成功', `<div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
+        <div style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">完整 Key (配置里可查, 也可随时回来复制):</div>
+        <div class="mono" style="word-break:break-all;background:var(--md-sys-color-surface-container);padding:8px;border-radius:10px;user-select:all">${esc(k.key||'')}</div>
+        <div style="font-size:10px">客户端用法: base_url 填 <span class="mono">http://&lt;网关地址&gt;:${Store.mainPort||'主端口'}/${esc(Store.inst==='default'?'':Store.inst+'/')}v1</span>（末尾 /v1 可省略）, API Key 填上面的 Key</div>
+        <md-filled-button id="cd-copy-new">复制 Key</md-filled-button>
+      </div>`, {okText:'关闭', cancel:false});
+      setTimeout(()=>{ const b=$('#cd-copy-new'); if(b) b.onclick=()=>{ navigator.clipboard&&navigator.clipboard.writeText(k.key||''); snack('已复制'); }; },50);
+      renderCards();
+      return false;
+    }catch(e){ snack(e.message,true); return false; }
+    return true;
+  }});
+}
+// ---- Edit an existing card: same form, complete permission set ----
+function openCardEdit(key){
+  const k=cardCache.find(x=>x.key===key);
+  if(!k){ snack('卡密列表已刷新, 请重试',true); return; }
+  openDialog('编辑用户卡 · '+(k.name||key.slice(0,10)), cardDialogHtml(k), {onOk:async ()=>{
+    const body=cardBodyFromDialog(key);
+    if(!body.name){ snack('名称必填',true); return false; }
+    try{ await adapter.updateKey(Store.inst,body); snack('已保存'); renderCards(); }
+    catch(e){ snack(e.message,true); return false; }
+    return true;
+  }});
 }
 // ---- Key card operations ----
 async function cardAction(action,key,name,on){
   try{
     if(action==='copyKey'){ await navigator.clipboard.writeText(key); snack('已复制完整 Key'); return; }
+    if(action==='editKey'){ openCardEdit(key); return; }
     if(action==='toggleKey'){ await adapter.updateKey(Store.inst,{key,enable:!on}); snack(on?'已禁用':'已启用'); renderCards(); return; }
     if(action==='delKey'){
       if(!confirm('删除卡密「'+(name||key.slice(0,10))+'」? 该Key立即失效。')) return;
@@ -916,12 +1051,16 @@ async function cardAction(action,key,name,on){
         <div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
           <md-outlined-text-field data-f="addWan" label="追加额度(万 tokens)" type="number" value="0" helper="在现有额度上追加; 0=不变"></md-outlined-text-field>
           <label style="display:flex;align-items:center;gap:4px;font-size:11px"><md-checkbox data-f="reset"></md-checkbox>重置已用量为 0</label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px"><md-checkbox data-f="resetRate"></md-checkbox>清除本分钟 RPM/TPM 窗口</label>
         </div>`, {onOk:async ()=>{
           const v=dlgValue();
           const body={key};
           const addWan=Number(v.addWan)||0;
           if(addWan>0) body.addQuota=Math.round(addWan*10000);
-          if(v.reset) body.resetUsage=true;
+          const resetEl=$('#dlgBody md-checkbox[data-f="reset"]');
+          if(resetEl && resetEl.selected) body.resetUsage=true;
+          const resetRateEl=$('#dlgBody md-checkbox[data-f="resetRate"]');
+          if(resetRateEl && resetRateEl.selected) body.resetRate=true;
           try{ await adapter.updateKey(Store.inst,body); snack('已更新'); renderCards(); }catch(e){ snack(e.message,true); return false; }
           return true;
         }});
@@ -1052,6 +1191,41 @@ function onChartScroll(ev){
 function bindChartTracks(){
   $$('.chart-track').forEach(tr=>tr.addEventListener('scroll', onChartScroll, {passive:true}));
 }
+// ---- Usage granularity: 1D (day) / 1H (hour) / 1M (minute) ----
+// Day buckets are the long-running totals the gateway has always kept; hourly (7 days) and minutely
+// (4 hours) buckets are recorded alongside them so the same card can zoom in without a refetch.
+// Bucket keys are UTC (gateway convention), so every label here is UTC clock time.
+const GRAN_NOTE={'1D':'最近 14 天 · 单位 Token','1H':'最近 24 小时 · UTC · 单位 Token','1M':'最近 60 分钟 · UTC · 单位 Token'};
+function syncGranTabs(){ $$('[data-gran]').forEach(b=>b.classList.toggle('on', b.dataset.gran===Store.gran)); }
+function granSeries(s){
+  s=s||{};
+  const g=Store.gran||'1D';
+  if(g==='1H'||g==='1M'){
+    const n=g==='1H'?24:60, step=g==='1H'?3600e3:60e3;
+    const src=(g==='1H'?s.hourly:s.minutely)||{};
+    const base=Math.floor(Date.now()/step)*step, out=[];
+    for(let i=n-1;i>=0;i--){
+      const iso=new Date(base-i*step).toISOString();
+      const key=iso.slice(0,10)+' '+iso.slice(11, g==='1H'?13:16);
+      const v=src[key]||{};
+      out.push({label:g==='1H'?iso.slice(11,13)+':00':iso.slice(11,16), in:v.inputTokens||0, out:v.outputTokens||0});
+    }
+    return out;
+  }
+  return Object.entries(s.daily||{}).sort((x,y)=>x[0].localeCompare(y[0])).slice(-14)
+    .map(([d,v])=>({label:String(d).slice(5), in:v.inputTokens||0, out:v.outputTokens||0}));
+}
+function setGran(g){
+  if(!GRAN_NOTE[g] || g===Store.gran) return;
+  Store.gran=g;
+  try{ localStorage.setItem('agw-gran',g); }catch(_){}
+  syncGranTabs();
+  const note=$('#st-gran-note'); if(note) note.textContent=GRAN_NOTE[g];
+  if(!Store.statsRaw || !Store.charts || Store.page!=='stats') return;
+  Store.charts.daily=granSeries(Store.statsRaw);
+  // redraw both panes of the daily track: the other one is one swipe away and must not show old buckets
+  for(const m of (CHART_VIEWS.daily||[])) drawChart('daily', m);
+}
 async function renderStats(){
   if(Store._stBusy) return;
   Store._stBusy=true;
@@ -1082,10 +1256,10 @@ async function renderStats(){
     $('#st-dist-note').textContent=dTot?' · 合计 '+fmtTok(dTot)+' tokens':'';
     const dist=DIST_KEYS.map(k=>({name:DIST_LABEL[k],value:D[k]})).filter(r=>r.value>0).sort((a,b)=>b.value-a.value);
     const models=bm.map(([m,d])=>({name:m,value:(d.inputTokens||0)+(d.outputTokens||0),requests:d.requests||0})).sort((a,b)=>b.value-a.value);
-    const daily=Object.entries(s.daily||{}).sort((x,y)=>x[0].localeCompare(y[0])).slice(-14)
-      .map(([d,v])=>({label:String(d).slice(5),in:v.inputTokens||0,out:v.outputTokens||0}));
-    Store.charts={daily, models, dist};
-    syncChartTabs(); drawAllCharts(); alignChartTracks(false);
+    Store.statsRaw=s;
+    Store.charts={daily:granSeries(s), models, dist};
+    const note=$('#st-gran-note'); if(note) note.textContent=GRAN_NOTE[Store.gran]||GRAN_NOTE['1D'];
+    syncChartTabs(); syncGranTabs(); drawAllCharts(); alignChartTracks(false);
   }catch(e){
     if(e.name==='AbortError'){ if(stTimedOut) $('#st-requests').textContent='超时'; }
     else snack(e.message,true);
@@ -1122,10 +1296,11 @@ async function renderLogs(){
   if(lgInst!==cur){ lgInst=cur; box.textContent='加载中…'; }
   try{
     const lines=+($('#lg-lines').value||100);
-    const [txt,cfg,reqs]=await Promise.all([
+    const [txt,cfg,reqs,lgc]=await Promise.all([
       adapter.getLogs(cur,lines,signal).catch(e=>{ if(e.name==='AbortError') throw e; return '读取失败: '+e.message; }),
       adapter.getConfig(cur,signal).catch(e=>{ if(e.name==='AbortError') throw e; return null; }),
       adapter.getRequests(cur,signal).catch(e=>{ if(e.name==='AbortError') throw e; return []; }),
+      adapter.getLogCfg(cur,signal).catch(e=>{ if(e.name==='AbortError') throw e; return null; }),
     ]);
     const next=txt||'(空)';
     // Replace in place only when the text really changed: identical content leaves scroll and layout untouched
@@ -1142,6 +1317,7 @@ async function renderLogs(){
       $('#lg-rec-server').value=rqSaved.server;
     }
     renderReqRows(reqs);
+    if(lgc) lgApply(lgc);
   }catch(e){ if(e.name!=='AbortError'){ box.textContent='读取失败: '+e.message; } }
 }
 // Record settings save themselves on change (no save button); an unchanged value returns early so a mere focus/blur does not restart the instance.
@@ -1159,6 +1335,91 @@ async function saveRecCfg(){
   }catch(e){ snack(e.message,true); }
   finally{ rqSaving=false; if(rqPending){ rqPending=false; saveRecCfg(); } }
 }
+/* ============ Log file settings (two sliders) ============
+ * 记录上限 = how large gateway.log may grow before the oldest half is dropped; 缓冲区大小 = how many
+ * bytes are batched before one write reaches the disk (fewer writes = less flash wear, the panel then
+ * lags by up to ~1 s). The server clamps both and the buffer never exceeds the cap, so the UI re-reads
+ * the saved values after every change instead of trusting what was submitted. */
+const LOG_CAP_STEPS=[32,64,128,256,512,1024,2048,4096,8192,16384,32768];   // KB
+const LOG_BUF_STEPS=[8,16,32,64,128,256,512,1024,2048,4096,8192];          // KB
+const LOG_DEF={maxBytes:8*1024*1024, bufferBytes:64*1024};
+let lgCfg=Object.assign({},LOG_DEF);
+let lgBusy=false, lgDragging=false;
+function lgSize(kb){ return kb>=1024 ? (kb/1024)+' MB' : kb+' KB'; }
+function lgStepIdx(list, bytes){
+  const kb=Math.max(1, Math.round((Number(bytes)||0)/1024));
+  let best=0, dist=Infinity;
+  list.forEach((v,i)=>{ const d=Math.abs(v-kb); if(d<dist){ dist=d; best=i; } });
+  return best;
+}
+function lgPaint(){
+  const cap=$('#lg-cap'), buf=$('#lg-buf'); if(!cap||!buf) return;
+  const ci=lgStepIdx(LOG_CAP_STEPS, lgCfg.maxBytes), bi=lgStepIdx(LOG_BUF_STEPS, lgCfg.bufferBytes);
+  cap.value=String(ci); buf.value=String(bi);
+  const cv=$('#lg-cap-val'), bv=$('#lg-buf-val');
+  if(cv) cv.textContent=lgSize(LOG_CAP_STEPS[ci]);
+  if(bv) bv.textContent=lgSize(LOG_BUF_STEPS[bi]);
+}
+function lgState(st){
+  const el=$('#lg-cfg-state'); if(!el) return;
+  if(!st){ el.textContent='写入缓冲与日志文件上限 · 拖动后即时生效'; return; }
+  if(st.enabled){
+    const kb=Math.round((Number(st.size)||0)/1024);
+    el.textContent='已托管 '+(String(st.file||'').split('/').pop()||'gateway.log')
+      +' · 当前 '+(kb>=1024?(kb/1024).toFixed(2)+' MB':kb+' KB');
+  } else {
+    el.textContent='当前进程未托管日志文件 (需由 agw.sh 启动) · 设置已保存';
+  }
+}
+function lgApply(st){
+  if(!st) return;
+  // With the writer installed the live sizes win over the saved ones: the file is process-wide, so a
+  // second instance's config may say something else entirely.
+  const saved=st.saved||{}, live=st.enabled?st:{};
+  lgCfg={
+    maxBytes:Number(live.maxBytes)||Number(saved.maxBytes)||lgCfg.maxBytes,
+    bufferBytes:Number(live.bufferBytes)||Number(saved.bufferBytes)||lgCfg.bufferBytes,
+  };
+  if(!lgDragging && !lgBusy) lgPaint();
+  lgState(st);
+}
+async function lgSave(){
+  const cap=$('#lg-cap'), buf=$('#lg-buf'); if(!cap||!buf||lgBusy) { lgPaint(); return; }
+  const capKB=LOG_CAP_STEPS[+cap.value]||8192;
+  const bufKB=Math.min(LOG_BUF_STEPS[+buf.value]||64, capKB);
+  const next={maxBytes:capKB*1024, bufferBytes:bufKB*1024};
+  if(next.maxBytes===lgCfg.maxBytes && next.bufferBytes===lgCfg.bufferBytes){ lgPaint(); return; }
+  lgBusy=true;
+  try{
+    const r=await adapter.saveLogCfg(Store.inst, next);
+    const saved=(r&&r.saved)||{};
+    lgCfg={
+      maxBytes:Number(r&&r.enabled?r.maxBytes:saved.maxBytes)||next.maxBytes,
+      bufferBytes:Number(r&&r.enabled?r.bufferBytes:saved.bufferBytes)||next.bufferBytes,
+    };
+    lgPaint(); lgState(r); snack('日志设置已保存');
+  }catch(e){ snack(e.message,true); lgPaint(); }
+  finally{ lgBusy=false; }
+}
+function lgBind(){
+  const cap=$('#lg-cap'), buf=$('#lg-buf'); if(!cap||!buf) return;
+  const paint=()=>{
+    $('#lg-cap-val').textContent=lgSize(LOG_CAP_STEPS[+cap.value]||8192);
+    $('#lg-buf-val').textContent=lgSize(LOG_BUF_STEPS[+buf.value]||64);
+  };
+  [cap,buf].forEach(el=>{
+    el.addEventListener('input',()=>{ lgDragging=true; paint(); });
+    el.addEventListener('change',()=>{ lgDragging=false; lgSave(); });
+  });
+  const rs=$('#lg-cfg-reset');
+  if(rs) rs.addEventListener('click',()=>{
+    cap.value=String(lgStepIdx(LOG_CAP_STEPS, LOG_DEF.maxBytes));
+    buf.value=String(lgStepIdx(LOG_BUF_STEPS, LOG_DEF.bufferBytes));
+    paint(); lgSave();
+  });
+  lgPaint();
+}
+
 // Fetch a request/response body by id from the record file and show it in a dialog
 async function viewRecordBody(id){
   openDialog('请求正文', '<div style="padding:4px">加载中…</div>', {okText:'关闭', cancel:false});
@@ -1833,7 +2094,7 @@ function chartPalette(n){
   });
 }
 
-// ---- 按日期用量: bars / line ----
+// ---- 用量趋势 (per day / hour / minute): bars / line ----
 function drawDailyChart(days, mode, id){
   const H=210, g=cvCtx(id||'st-chart-daily-bar',H); if(!g) return;
   const {cx,w,h}=g;
@@ -1996,6 +2257,10 @@ function drawPieChart(id, rows, {maxSlices=6}={}){
 
 // ============ Events (centralized delegation) ============
 document.body.addEventListener('click', e=>{
+  const head=e.target.closest('.xc-head');
+  if(head){ xcToggle(head); return; }
+  const gran=e.target.closest('[data-gran]');
+  if(gran){ setGran(gran.dataset.gran); return; }
   const tab=e.target.closest('[data-chart]');
   if(tab && tab.dataset.chart){ setChartMode(tab.dataset.chart, tab.dataset.mode); return; }
   const nav=e.target.closest('[data-page]');
@@ -2108,7 +2373,7 @@ window.addEventListener('offline',()=>{ Store.online=false; snack('网络已断�
 
 // ============ Boot ============
 if(!MW_OK){
-  $('#compatBar').textContent='⚠ Material Web 组件库 (/auth/vendor/mw-v2.js) 加载失败，页面将只有无样式内容。请确认文件已部署。';
+  $('#compatBar').textContent='⚠ Material Web 组件库 (vendor/mw-v2.js) 加载失败，页面将只有无样式内容。请确认文件已部署。';
   $('#compatBar').classList.add('show');
 }
 $('#keyBtn').addEventListener('click',openKeyDialog);
@@ -2343,6 +2608,10 @@ $('#railBrand').addEventListener('click', openBrandDialog);
 loadTheme();
 applyBg();
 try{ const cm=JSON.parse(localStorage.getItem('agw-chart')||'null'); if(cm) Store.chartMode=Object.assign(Store.chartMode,cm); }catch(_){}
+try{ const g=localStorage.getItem('agw-gran'); if(g && GRAN_NOTE[g]) Store.gran=g; }catch(_){}
+{ const n=$('#st-gran-note'); if(n) n.textContent=GRAN_NOTE[Store.gran]; }
+syncGranTabs();
+lgBind();
 try{ setRail(localStorage.getItem('agw-rail')==='open', false); }catch(_){ setRail(false, false); }
 buildNav();
 syncNav(true);

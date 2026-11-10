@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 /* 参数覆写 (paramOverride)
  * 网关自己的参数必须盖过 SDK 请求里的同名参数，而且两条路径都要生效：
  *   - 同方言直通（body 原样发，只改 model）
@@ -148,13 +149,14 @@ function chatBody(model) {
     }],
   }));
   const cfg = G.loadConfig(cfgFile);
+  surface.set(cfg);
   eq(JSON.stringify(cfg.paramOverride), '{"temperature":0.6}', '配置加载: 实例级 paramOverride 保留');
   eq(JSON.stringify(cfg.channels[0].paramOverride), '{"top_p":0.5,"metadata":{"from":"gateway"}}', '配置加载: 渠道级 paramOverride 保留');
 
   const started = await G.startServer(cfg, { host: '127.0.0.1', port: 0, multi: false });
   const port = started.port;
   const post = (route, body) => new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, path: route, method: 'POST',
+    const req = http.request({ host: '127.0.0.1', port, path: surface.spath(route), method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer x' } }, res => {
       const chunks = []; res.on('data', c => chunks.push(c));
       res.on('end', () => resolve({ status: res.statusCode, raw: Buffer.concat(chunks).toString('utf8') }));

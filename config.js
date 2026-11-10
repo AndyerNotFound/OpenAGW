@@ -12,6 +12,8 @@ const { logErr } = require('./util');
 const { redactCache } = require('./redact');
 const { normalizeOverride } = require('./override');
 const mdns = require('./mdns');
+const logfile = require('./logfile');
+const permissions = require('./permissions');
 let crypt = null; try { crypt = require('./crypt.js'); } catch (_) {}
 
 // ================= Config loading =================
@@ -53,8 +55,15 @@ function applyDefaults(cfg) {
   cfg.listen.port = Number(cfg.listen.port || 16384);
   cfg.listen.host = String(cfg.listen.host || '0.0.0.0');
 
-// Key card list normalization
+// Key card list normalization (user cards: quota / role / limits / model-provider-instance whitelists)
   cfg.apiKeys = Array.isArray(cfg.apiKeys) ? cfg.apiKeys.filter(k => k && k.key) : [];
+  for (const k of cfg.apiKeys) {
+    if (k.rpm !== undefined) k.rpm = Math.min(1000000, Math.max(0, Math.floor(Number(k.rpm) || 0)));
+    if (k.tpm !== undefined) k.tpm = Math.min(1000000000, Math.max(0, Math.floor(Number(k.tpm) || 0)));
+    for (const f of ['models', 'channels', 'branches']) {
+      if (k[f] !== undefined) k[f] = permissions.list(k[f]).slice(0, 200);
+    }
+  }
   // Multi-user support was removed (2026-10-30): drop the legacy credential table and the
   // self-registration settings so they are never written back to disk.
   delete cfg.users;
@@ -85,6 +94,9 @@ cfg.modelSync.intervalMin = Number(cfg.modelSync.intervalMin) > 0 ? Number(cfg.m
   cfg.panel = { openBrowser: __panel.openBrowser !== false };
 cfg.adminExpireAt = Number(cfg.adminExpireAt) > 0 ? Number(cfg.adminExpireAt) : 0; // panel session expiry (agw admin expire)
   cfg.maxBodyBytes = Number(cfg.maxBodyBytes || 64 * 1024 * 1024);
+// Gateway log file (see logfile.js): buffered writes plus a hard size cap, adjustable from the panel
+// and applied hot. Normalized here so a hand-edited config can never ask for an absurd value.
+  cfg.log = logfile.normalize(cfg.log);
   cfg.connectTimeout = Number(cfg.connectTimeout || 15000);
   cfg.responseTimeout = Number(cfg.responseTimeout || 180000);
 // Same-channel retry count for connection-level errors (socket hang up etc.), default 2; 0 = off

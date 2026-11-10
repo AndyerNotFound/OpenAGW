@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 const http = require('http');
 const net = require('net');
 const path = require('path');
@@ -8,6 +9,7 @@ const { spawn } = require('child_process');
 
 const MOCK = 43331, GW = 43332;
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agw-sticky-'));
+require('./_surface').useDir(dir);
 const cfgPath = path.join(dir, 'config.json');
 
 let pass = 0, fail = 0;
@@ -35,7 +37,7 @@ function reqJson(port, payload, headers) {
   return new Promise((resolve) => {
     const data = JSON.stringify(payload);
     const req = http.request({
-      host: '127.0.0.1', port, path: '/v1/chat/completions', method: 'POST',
+      host: '127.0.0.1', port, path: surface.spath('/v1/chat/completions'), method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data), ...(headers || {}) },
     }, res => {
       const cs = []; res.on('data', c => cs.push(c));

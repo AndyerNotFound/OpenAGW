@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 /* SSE backpressure must resume (regression, 2026-11-09).
  *
  * Symptom before the fix: a streamed answer stalled after ~382 KB with the upstream silent until the
@@ -42,15 +43,16 @@ const up = http.createServer((req, res) => {
     listen: { host: '127.0.0.1', port: 0 }, webToken: '', panel: { openBrowser: false },
     modelSync: { enable: false }, probe: { enable: false }, retrySame: 0,
     channels: [{ name: 'up', type: 'openai', baseUrl: 'http://127.0.0.1:' + up.address().port, apiKey: 'x', models: ['m'], default: true }],
-    apiKeys: [],
+    apiKeys: [{ key: 'sk-test', name: 'test' }],
   }));
   const cfg = G.loadConfig(cf);
+  surface.set(cfg);
   const st = await G.startServer(cfg, { host: '127.0.0.1', port: 0, multi: false });
 
   const t0 = Date.now();
   const result = await new Promise((resolve, reject) => {
     const timer = setTimeout(() => { try { req.destroy(); } catch (_) {} resolve({ timeout: true, bytes: 0, ms: Date.now() - t0 }); }, 15000);
-    const req = http.request({ host: '127.0.0.1', port: st.port, path: '/v1/chat/completions', method: 'POST', headers: { 'Content-Type': 'application/json' } }, res => {
+    const req = http.request({ host: '127.0.0.1', port: st.port, path: surface.spath('/v1/chat/completions'), method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer sk-test' } }, res => {
       let bytes = 0;
       res.on('data', c => { bytes += c.length; });
       res.on('end', () => { clearTimeout(timer); resolve({ status: res.statusCode, bytes, ms: Date.now() - t0 }); });

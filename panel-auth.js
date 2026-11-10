@@ -49,6 +49,24 @@ function read(cfg, inst) {
   }
 }
 
+/* Surface routing runs on every request, so the small state file must not be re-read and
+ * re-parsed each time. The cache is short-lived and dropped on every write: a rotated sid
+ * or user pair takes effect immediately in-process, and at most one TTL elsewhere. */
+const CACHE_MS = 5000;
+const _cache = new Map(); // stateFile -> { at, st }
+function readCached(cfg, inst) {
+  const f = stateFile(cfg, inst);
+  const now = Date.now();
+  const c = _cache.get(f);
+  if (c && now - c.at < CACHE_MS) return c.st;
+  const st = read(cfg, inst);
+  _cache.set(f, { at: now, st });
+  return st;
+}
+function cacheDrop(cfg, inst) {
+  _cache.delete(stateFile(cfg, inst));
+}
+
 function write(cfg, inst, st) {
   const file = stateFile(cfg, inst);
   const dir = path.dirname(file);
@@ -59,6 +77,7 @@ function write(cfg, inst, st) {
   try { fs.chmodSync(tmp, 0o600); } catch (_) {}
   fs.renameSync(tmp, file);
   try { fs.chmodSync(file, 0o600); } catch (_) {}
+  cacheDrop(cfg, inst);
   if (cfg && typeof cfg === 'object') { cfg._panelAuth = st; if (st.sessions) cfg._panelAuthSessions = st.sessions; }
   return st;
 }
@@ -66,7 +85,7 @@ function write(cfg, inst, st) {
 function init(cfg, inst) {
   const now = Date.now();
   return write(cfg, inst, {
-    v: 1,
+    v: 2,
     sid: random(24),
     adminToken: random(32),
     tokenHash: '',
@@ -145,10 +164,12 @@ module.exports = {
   instName,
   stateFile,
   read,
+  readCached,
   init,
   ensure,
   issue,
   verify,
   revoke,
   tokenState,
+  safeEqual,
 };

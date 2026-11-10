@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 /* Plugins over real HTTP: /api/app/bootstrap, /plugins dispatch, and the closed
  * prefixes that must stay closed. In-process gateway, port 0.
  * Run: node test/plugins_e2e_test.js
@@ -18,7 +19,7 @@ function ok(cond, msg) {
 }
 function request(port, p, headers = {}, method = 'GET', body = null) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, path: p, headers, method }, res => {
+    const req = http.request({ host: '127.0.0.1', port, path: surface.spath(p), headers, method }, res => {
       let out = '';
       res.on('data', c => out += u8p(c));
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: out }));
@@ -42,6 +43,7 @@ function request(port, p, headers = {}, method = 'GET', body = null) {
     channels: [{ name: 'dummy', type: 'openai', baseUrl: 'http://127.0.0.1:9', apiKey: 'sk-test', models: ['m'], default: true }],
   }));
   const cfg = G.loadConfig(cfgFile);
+  surface.set(cfg);
   const started = await G.startServer(cfg, { host: '127.0.0.1', port: 0, multi: false });
   const port = started.port;
 

@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 /* Endpoint completion: a base URL that stops at the host (no /v1) reaches the same endpoints.
  * Coverage: (1) completePath unit matrix — exact / prefix / idempotent / trailing slash
  *           (2) closed prefixes are NOT completed (/health /balance /dashboard/... stay 404)
@@ -74,7 +75,7 @@ for (const p of ['/health', '/status', '/auth/login', '/admin', '/plugins', '/ap
   for (const n of ['chat', 'models', 'images']) {
     ok(!paths.RESERVED_PATHS.has(n), 'names: 端点首段 ' + n + ' 不算保留字(交给 isEndpointHead 管)');
   }
-  ok(paths.isPanelPath('/admin') && paths.isPanelPath('/admin/api/x') && paths.isPanelPath('/auth/s/t'), 'names: 面板路径判定');
+  ok(paths.isPanelPath('/admin') && paths.isPanelPath('/admin/api/x') && !paths.isPanelPath('/auth/s/t'), 'names: 面板路径判定(/auth 不再是面板)');
   ok(paths.RESERVED_PATHS.has('credits'), 'names: 保留字含 credits(主端口不可路由, 只能走实例端口)');
   ok(!paths.isPanelPath('/v1/models') && !paths.isPanelPath('/chat/completions'), 'names: API 路径不是面板路径');
   const heads = [...paths.RESERVED_PATHS].filter(n => require('../endpoints.js').isEndpointHead(n));
@@ -307,7 +308,7 @@ function freePort() {
     const panelAuth = require('../panel-auth.js');
     const tok = panelAuth.read(s2.pool.instances.get('default'), 'default').adminToken;
     const post = (p, body) => new Promise((resolve, reject) => {
-      const r = http.request({ host: '127.0.0.1', port: mainPort, path: p, method: 'POST', headers: { 'Content-Type': 'application/json', 'x-agw-token': tok } }, res => {
+      const r = http.request({ host: '127.0.0.1', port: mainPort, path: surface.pair(dir2, 'default').admin + p, method: 'POST', headers: { 'Content-Type': 'application/json', 'x-agw-token': tok } }, res => {
         let out = ''; res.on('data', c => out += c); res.on('end', () => resolve({ status: res.statusCode, body: out }));
       });
       r.on('error', reject); r.write(body); r.end();
@@ -342,11 +343,11 @@ function freePort() {
   eq((await req(offPort, '/v1/models', 'GET')).status, 503, 'multi: 停用实例的 /v1/models 同样 503(一致)');
   eq((await req(offPort, '/chat/completions', 'POST', chatBody)).status, 503, 'multi: 停用实例的裸 /chat/completions 503');
 // stopping an instance must not also take away the panel that starts it again
-  const offAdmin = await req(offPort, '/admin', 'GET');
-  ok(offAdmin.status !== 503, 'multi: 停用实例的 /admin 仍可达(不是 503, 实际 ' + offAdmin.status + ')');
-  const offAuth = await req(offPort, '/auth', 'GET');
-  ok(offAuth.status !== 503, 'multi: 停用实例的 /auth 仍可达(不是 503, 实际 ' + offAuth.status + ')');
-  eq((await req(offPort, '/admin/api/instances', 'GET')).status, 401, 'multi: 停用实例的面板 API 仍返回 401(要认证, 不是 503)');
+  const P3 = surface.pair(dir3, 'default');
+  const offPanel = await req(offPort, P3.admin + '/admin/', 'GET');
+  ok(offPanel.status === 401, 'multi: 停用实例的面板仍可达(401 要认证, 不是 503)');
+  eq((await req(offPort, P3.admin + '/admin/api/instances', 'GET')).status, 401, 'multi: 停用实例的面板 API 仍返回 401(要认证, 不是 503)');
+  eq((await req(offPort, '/admin', 'GET')).status, 404, 'multi: 裸 /admin 仍是 404');
   for (const [, v] of s3.pool.servers) { try { v.server.close(); } catch (_) {} }
   fs.rmSync(dir3, { recursive: true, force: true });
 

@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 /* Request recording and error passthrough must not buffer whole bodies (2026-11-09).
  *
  * Before:
@@ -78,7 +79,7 @@ function post(port, body, opts) {
     let peak = 0;
     const timer = setInterval(() => { const r = process.memoryUsage().rss; if (r > peak) peak = r; }, 5);
     const chunks = [];
-    const req = http.request({ host: '127.0.0.1', port, path: '/v1/chat/completions', method: 'POST', headers: { 'Content-Type': 'application/json' } }, res => {
+    const req = http.request({ host: '127.0.0.1', port, path: surface.spath('/v1/chat/completions'), method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer sk-test' } }, res => {
       let bytes = 0;
       res.on('data', c => { bytes += c.length; if (opts.keep) chunks.push(c); });
       res.on('end', () => {
@@ -109,9 +110,10 @@ function records(dir) {
     retrySame: 0,
     record: { enable: true, maxChars: 2000 },
     channels: [{ name: 'up', type: 'openai', baseUrl: 'http://127.0.0.1:' + upPort, apiKey: 'x', models: ['m'], default: true }],
-    apiKeys: [],
+    apiKeys: [{ key: 'sk-test', name: 'test' }],
   }));
   const cfg = G.loadConfig(cfgFile);
+  surface.set(cfg);
   const started = await G.startServer(cfg, { host: '127.0.0.1', port: 0, multi: false });
   const port = started.port;
 
@@ -146,7 +148,7 @@ function records(dir) {
   // ---------- 3. client hangs up mid-stream: the record must still land ----------
   mode = 'stream';
   await new Promise((resolve) => {
-    const rq = http.request({ host: '127.0.0.1', port, path: '/v1/chat/completions', method: 'POST', headers: { 'Content-Type': 'application/json' } }, res => {
+    const rq = http.request({ host: '127.0.0.1', port, path: surface.spath('/v1/chat/completions'), method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer sk-test' } }, res => {
       let got = 0;
       res.on('data', c => { got += c.length; if (got > 200000) { rq.destroy(); resolve(); } });
       res.on('error', () => resolve());
@@ -165,7 +167,7 @@ function records(dir) {
   mode = 'silent';
   const beforeEarly = records(dir).length;
   await new Promise((resolve) => {
-    const rq = http.request({ host: '127.0.0.1', port, path: '/v1/chat/completions', method: 'POST', headers: { 'Content-Type': 'application/json' } }, res => {
+    const rq = http.request({ host: '127.0.0.1', port, path: surface.spath('/v1/chat/completions'), method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer sk-test' } }, res => {
       res.on('data', () => {}); res.on('error', () => resolve());
     });
     rq.on('error', () => resolve());
@@ -184,7 +186,7 @@ function records(dir) {
   mode = 'breakstream';
   const beforeBreak = records(dir).length;
   await new Promise((resolve) => {
-    const rq = http.request({ host: '127.0.0.1', port, path: '/v1/chat/completions', method: 'POST', headers: { 'Content-Type': 'application/json' } }, res => {
+    const rq = http.request({ host: '127.0.0.1', port, path: surface.spath('/v1/chat/completions'), method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer sk-test' } }, res => {
       res.on('data', () => {});
       res.on('end', resolve);
       res.on('error', resolve);
@@ -203,7 +205,7 @@ function records(dir) {
   mode = 'ok';
   const beforeX = records(dir).length;
   const xr = await new Promise((resolve, reject) => {
-    const rq = http.request({ host: '127.0.0.1', port, path: '/v1/messages', method: 'POST', headers: { 'Content-Type': 'application/json' } }, res => {
+    const rq = http.request({ host: '127.0.0.1', port, path: surface.spath('/v1/messages'), method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer sk-test' } }, res => {
       const b = []; res.on('data', c => b.push(c));
       res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(b).toString('utf8') }));
     });

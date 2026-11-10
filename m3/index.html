@@ -7,7 +7,7 @@
 <meta name="description" content="OpenAGW 管理面板 · Material Web 版">
 <meta http-equiv="Cache-Control" content="no-cache,no-store,must-revalidate">
 <title>OpenAGW · Material Web v2.11</title>
-<link rel="stylesheet" href="/auth/app.css">
+<link rel="stylesheet" href="app.css">
 </head>
 <body>
 
@@ -227,8 +227,11 @@
         <div class="mono" id="rp-test-result" style="white-space:pre-wrap;word-break:break-all;font-size:10px;min-height:30px;padding:4px;border:1px solid var(--md-sys-color-outline-variant);border-radius:8px">（结果）</div>
       </md-filled-card>
       <md-filled-card>
-        <details class="rp-help">
-          <summary>📖 正则表达式速查（点击展开）</summary>
+        <div class="xc rp-help" data-xc>
+          <button type="button" class="xc-head" aria-expanded="false" aria-controls="rp-help-body">
+            <span class="msym xc-cue" aria-hidden="true">expand_more</span><span>📖 正则表达式速查</span>
+          </button>
+          <div class="xc-body" id="rp-help-body" hidden>
           <div class="card-sub" style="margin:8px 0">「查找」里写正则，匹配到的文本会被「替换为」的内容取代。所有匹配都会被替换（全局替换）。</div>
           <table>
             <tr><th>写法</th><th>含义</th><th>例子</th></tr>
@@ -264,7 +267,8 @@
             <li>发送方向会跳过 model 字段和图片数据（data:URL），不会误伤路由和图片。</li>
             <li>写错了正则会添加失败并提示，先点「测试」按钮本地试跑再加更稳妥。</li>
           </ul>
-        </details>
+          </div>
+        </div>
       </md-filled-card>
     </section>
     <section id="page-keys" class="page hidden" hidden>
@@ -295,6 +299,7 @@
         </div>
       </md-filled-card>
 
+
       <md-filled-card style="margin-top:8px">
         <div class="card-head"><div><div class="card-title">管理端资料</div><div class="card-sub">头像 / 名称 / 简介 / 其他 · 用 agw admin → profile change 修改</div></div></div>
         <div style="display:flex;gap:8px;align-items:flex-start">
@@ -309,7 +314,7 @@
       </md-filled-card>
 
       <md-filled-card style="margin-top:8px">
-        <div class="card-head"><div><div class="card-title">卡密</div><div class="card-sub">新卡密钥长度 · 目标实例=顶栏当前选择</div></div></div>
+        <div class="card-head"><div><div class="card-title">用户与卡密</div><div class="card-sub">新卡密钥长度 · 目标实例=顶栏当前选择</div></div></div>
         <div class="grid-form">
           <md-outlined-text-field id="rg-keyLength" label="卡密长度(8-128)" type="number" helper="默认24, 不含 sk- 前缀"></md-outlined-text-field>
         </div>
@@ -324,7 +329,7 @@
           <md-filled-button id="cd-new"><md-icon slot="icon">add</md-icon><span id="cd-new-label">发卡</span></md-filled-button>
         </div>
         <div id="cd-pane-keys">
-          <div class="card-sub" style="margin-bottom:8px">API Key: 限额/禁用/过期/模型白名单 · 目标实例=顶栏当前选择</div>
+          <div class="card-sub" style="margin-bottom:8px">一张卡即一个用户: 额度 / 有效期 / 角色 / RPM·TPM 限流 / 实例·提供商·模型权限 · 目标实例=顶栏当前选择</div>
           <div id="cd-list" class="list-gap"><md-linear-progress indeterminate></md-linear-progress></div>
         </div>
       </md-filled-card>
@@ -370,16 +375,21 @@
 
       <md-filled-card>
         <div class="card-head">
-          <div><div class="card-title">按日期用量</div><div class="card-sub">最近 14 天 · 单位 Token</div></div>
-          <div class="chart-tabs" id="ct-daily" role="group" aria-label="按日期图表类型">
+          <div><div class="card-title">用量趋势</div><div class="card-sub" id="st-gran-note">最近 14 天 · 单位 Token</div></div>
+          <div class="chart-tabs" id="ct-daily" role="group" aria-label="用量趋势图表类型">
             <button type="button" data-chart="daily" data-mode="bar">柱状图</button>
             <button type="button" data-chart="daily" data-mode="line">折线图</button>
           </div>
         </div>
+        <div class="chart-tabs gran-tabs" id="st-gran" role="group" aria-label="统计精度">
+          <button type="button" data-gran="1D">1D</button>
+          <button type="button" data-gran="1H">1H</button>
+          <button type="button" data-gran="1M">1M</button>
+        </div>
         <div class="chart-box">
           <div class="chart-track" id="ct-track-daily" data-track="daily">
-            <div class="chart-pane"><canvas id="st-chart-daily-bar" height="200" role="img" aria-label="按日期用量图 · 柱状图"></canvas></div>
-            <div class="chart-pane"><canvas id="st-chart-daily-line" height="200" role="img" aria-label="按日期用量图 · 折线图"></canvas></div>
+            <div class="chart-pane"><canvas id="st-chart-daily-bar" height="200" role="img" aria-label="用量趋势图 · 柱状图"></canvas></div>
+            <div class="chart-pane"><canvas id="st-chart-daily-line" height="200" role="img" aria-label="用量趋势图 · 折线图"></canvas></div>
           </div>
         </div>
       </md-filled-card>
@@ -436,6 +446,35 @@
         <div class="tbl-wrap" style="margin-top:8px"><table class="tbl" id="rq-table" aria-label="请求记录">
           <thead><tr><th style="width:23%">时间</th><th style="width:22%">模型</th><th style="width:19%">渠道</th><th style="width:11%">状态</th><th style="width:13%">耗时</th><th style="width:12%">正文</th></tr></thead>
           <tbody></tbody></table></div>
+      </md-filled-card>
+
+      <md-filled-card>
+        <div class="card-head">
+          <div><div class="card-title">日志记录设置</div><div class="card-sub" id="lg-cfg-state">写入缓冲与日志文件上限 · 拖动后即时生效</div></div>
+          <md-text-button id="lg-cfg-reset">恢复默认</md-text-button>
+        </div>
+        <div class="lg-slider">
+          <div class="lg-slider-head"><span>记录上限</span><span class="lg-slider-val" id="lg-cap-val">8 MB</span></div>
+          <input type="range" id="lg-cap" min="0" max="10" step="1" value="8" aria-label="日志记录上限">
+          <div class="lg-slider-scale"><span>32 KB</span><span>32 MB</span></div>
+        </div>
+        <div class="lg-slider">
+          <div class="lg-slider-head"><span>缓冲区大小</span><span class="lg-slider-val" id="lg-buf-val">64 KB</span></div>
+          <input type="range" id="lg-buf" min="0" max="10" step="1" value="3" aria-label="日志写入缓冲区大小">
+          <div class="lg-slider-scale"><span>8 KB</span><span>8 MB</span></div>
+        </div>
+        <div class="xc" data-xc>
+          <button type="button" class="xc-head" aria-expanded="false" aria-controls="lg-help-body">
+            <span class="msym xc-cue" aria-hidden="true">expand_more</span><span>这两个滑块各自管什么</span>
+          </button>
+          <div class="xc-body" id="lg-help-body" hidden>
+            <div class="card-sub" style="line-height:1.7">
+              <b>记录上限</b>：日志文件长到这么大就自动裁掉最旧的一半，只保留最近的内容，手机存储不会被慢慢吃满。<br>
+              <b>缓冲区大小</b>：日志先攒这么多字节再一次性写入磁盘。数值越大写入次数越少、对闪存越友好，代价是面板里的日志最多滞后约 1 秒。<br>
+              缓冲区不会超过记录上限；改小后会立刻把已攒的内容写出去。仅在 <span class="mono">agw.sh</span> 启动时生效（<span class="mono">AGW_LOG_FILE</span> 由它传入）。
+            </div>
+          </div>
+        </div>
       </md-filled-card>
 
       <md-filled-card>
@@ -499,6 +538,6 @@
 
 <div id="snackbar" role="status" aria-live="polite"></div>
 
-<script type="module" src="/auth/app.js"></script>
+<script type="module" src="app.js"></script>
 </body>
 </html>

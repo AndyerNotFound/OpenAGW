@@ -1,8 +1,11 @@
 'use strict';
 /**
- * OpenAGW admin surface: /admin/api/* (JSON API) and the M3 panel under m3/, served at /auth
- * Referenced by gateway.js; /admin is only a redirect to /auth now (the old inline page is retired)
- * The admin API requires a panel session cookie, a local admin token, or the optional webToken
+ * OpenAGW admin surface, served under the secret prefix /<sid>/admin/ (surface.js strips it):
+ *   /<sid>/admin/<token>  one-time link (agw web login) -> login page
+ *   /<sid>/admin/login    admin card key + second factor -> session cookie
+ *   /<sid>/admin/         M3 panel under m3/ (+ static assets), session required
+ *   /<sid>/admin/api/*    JSON API: session cookie, local admin token, webToken or admin card key
+ * Without a cookie or token every admin endpoint answers 401 (unknown secret paths answer 404).
  */
 const fs = require('fs');
 const path = require('path');
@@ -17,6 +20,9 @@ const mdns = require('./mdns');
 const { isEndpointHead } = require('./endpoints');
 const { VERSION, utf8 } = require('./util');
 const { normalizeOverride } = require('./override');
+const logfile = require('./logfile');
+const permissions = require('./permissions');
+const ratelimit = require('./ratelimit');
 
 // cloudflared tunnel global state
 let tunnelProc = null, tunnelUrl = '', tunnelLog = [], tunnelTimer = null, tunnelNext = null;
@@ -198,6 +204,8 @@ const LOG_TAIL_WINDOW = 512 * 1024; // bytes read from the end at most
 function readLog(name, lines) {
 // Single-process mode: all instances share one gateway.log
   const f = path.join(MLOG(), POOL ? 'gateway.log' : `${name}.log`);
+  // Writes are batched by logfile.js; flush first or the panel shows a stale window (up to one buffer)
+  try { logfile.flush(); } catch (_) {}
   if (!fs.existsSync(f)) return '(无日志)';
   const want = Math.min(Math.max(1, parseInt(lines, 10) || 50), LOG_MAX_LINES);
   let fd = -1;
@@ -322,6 +330,56 @@ function sessCookieName(cfg) {
 function panelStateOf(cfg) {
   try { return panelAuth.read(cfg, cfg._name || currentName(cfg)); } catch (_) { return null; }
 }
+// Admin-role card keys are what the WebUI login page asks for. With none configured the
+// gateway is a local/keyless setup: the one-time link alone opens the panel, as before.
+function adminKeysOf(cfg) {
+  return (cfg.apiKeys || []).filter(k => k && k.role === 'admin' && k.enable !== false);
+}
+function needsPanelLogin(cfg) {
+  const aa = cfg.adminAuth || {};
+  return adminKeysOf(cfg).length > 0 || !!(aa.secondKey || aa.totpSecret);
+}
+
+/* The browser session entry behind the current request's cookie.
+ * Entries: {exp, panelSid} legacy, {exp, panelSid, pending:true} right after a one-time link,
+ * {exp, panelSid, login:true} after the login page (admin card key + second factor). */
+function readSessEnt(cfg, req) {
+  const h = (req && req.headers) || {};
+  const panelState = panelStateOf(cfg);
+  const map = cfg._webSess || panelAuth.sessionsOf(cfg, cfg._name || currentName(cfg));
+  if (!map) return null;
+  const ck = String(h.cookie || '');
+  const names = [sessCookieName(cfg)];
+  if (sessCookieName(cfg) !== 'agwSID') names.push('agwSID');
+  for (const nm of names) {
+    const m = ck.match(new RegExp('(?:^|;\\s*)' + nm + '=([A-Za-z0-9_-]{16,})'));
+    if (!m) continue;
+    const ent = map.get ? map.get(m[1]) : map[m[1]];
+    if (typeof ent === 'number') {
+      if (ent > Date.now()) return { sid: m[1], exp: ent };
+      continue;
+    }
+    if (ent && Number(ent.exp) > Date.now()) {
+      if (!ent.panelSid || (panelState && ent.panelSid === panelState.sid)) {
+        const out = {};
+        for (const k of Object.keys(ent)) out[k] = ent[k];
+        out.sid = m[1];
+        return out;
+      }
+    }
+  }
+  return null;
+}
+
+// The WebUI page itself: a session is required, and on an instance that has admin cards (or a
+// second factor) the session must be one the login page issued.
+function panelSessionOk(cfg, req) {
+  const ent = readSessEnt(cfg, req);
+  if (!ent) return false;
+  if (ent.login === true) return true;
+  return !needsPanelLogin(cfg);
+}
+
 function checkAdminAuth(cfg, req, query, opts = {}) {
 // Panel session expiry: clears all sessions at the deadline and persists the reset
   if (cfg.adminExpireAt > 0 && Date.now() >= cfg.adminExpireAt) {
@@ -337,50 +395,40 @@ function checkAdminAuth(cfg, req, query, opts = {}) {
   const supplied = [bearer, h['x-agw-token'], query && query.get('key')].filter(Boolean);
   const panelState = panelStateOf(cfg);
   let mainOk = false;
+  let sess = null;
 
 // Optional long-lived API token (kept for scripts; the panel itself only accepts a login session)
   if (!opts.panel) {
     if (cfg.webToken && supplied.includes(cfg.webToken)) mainOk = true;
     if (!mainOk && cfg.webToken && (h.cookie || '').includes(`agwWeb=${cfg.webToken}`)) mainOk = true;
     if (!mainOk && panelState && panelState.adminToken && supplied.includes(panelState.adminToken)) mainOk = true;
-  }
-
-// Browser session cookie issued by a valid one-time login link
-  const sessMap = cfg._webSess || panelAuth.sessionsOf(cfg, cfg._name || currentName(cfg));
-  if (!mainOk && sessMap) {
-    // Prefer the port-scoped cookie name; fall back to the legacy fixed name only when the
-    // scoped one is absent. A single alternation would match whichever name sorts first in the
-    // Cookie header (browsers keep a stale legacy agwSID around), locking the user out.
-    const ck = String(h.cookie || '');
-    const names = [sessCookieName(cfg)];
-    if (sessCookieName(cfg) !== 'agwSID') names.push('agwSID');
-    for (const nm of names) {
-      const m = ck.match(new RegExp('(?:^|;\\s*)' + nm + '=([A-Za-z0-9_-]{16,})'));
-      if (!m) continue;
-      const ent = sessMap.get ? sessMap.get(m[1]) : sessMap[m[1]];
-      if (typeof ent === 'number') {
-        if (ent > Date.now()) { mainOk = true; break; }
-      } else if (ent && Number(ent.exp) > Date.now()) {
-        if (!ent.panelSid || (panelState && ent.panelSid === panelState.sid)) { mainOk = true; break; }
+// ---- Admin API keys (apiKeys with role "admin"): accepted as Bearer / x-agw-token / ?key= ----
+    if (!mainOk) {
+      const adminTok = bearer || h['x-agw-token'] || (query && query.get('key')) || '';
+      if (adminTok) {
+        const adminKey = (cfg.apiKeys || []).find(k => k.key === adminTok && k.role === 'admin' && k.enable !== false);
+        if (adminKey) mainOk = true;
       }
     }
   }
 
-  // ---- Admin API keys (apiKeys with role "admin"): accepted as Bearer / x-agw-token / ?key= ----
+// Browser session cookie: the one-time link (keyless setups) or the login page issued it
   if (!mainOk) {
-    const adminTok = bearer || h['x-agw-token'] || (query && query.get('key')) || '';
-    if (adminTok) {
-      const adminKey = (cfg.apiKeys || []).find(k => k.key === adminTok && k.role === 'admin' && k.enable !== false);
-      if (adminKey) mainOk = true;
-    }
+    sess = readSessEnt(cfg, req);
+    if (sess) mainOk = true;
   }
 
   if (!mainOk) return false;
 
-// ---- Second factor (validated only when configured) ----
+// A card / 2FA instance only trusts a session that went through the login page. Token callers
+// are exempt: they carry their own second factor as headers on every call.
+  if (sess && needsPanelLogin(cfg) && sess.login !== true) return false;
+  if (opts.panel) return true;
+
+// ---- Second factor (the login page already validated it for its session) ----
   const aa = cfg.adminAuth || {};
-  const needSecond = !!(aa.secondKey || aa.totpSecret);
-  if (!needSecond) return true;
+  if (!aa.secondKey && !aa.totpSecret) return true;
+  if (sess && sess.login === true) return true;
   if (aa.secondKey && (h['x-admin-key2'] === aa.secondKey || (query && query.get('adminKey2') === aa.secondKey))) return true;
   if (aa.totpSecret && totpVerify(aa.totpSecret, h['x-totp'] || (query && query.get('totp')))) return true;
   return false;
@@ -391,8 +439,8 @@ function jsonRes(res, status, obj) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS' });
   res.end(body);
 }
-function textRes(res, status, text, ct) {
-  res.writeHead(status, { 'Content-Type': ct || 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS' });
+function textRes(res, status, text, ct, extra) {
+  res.writeHead(status, Object.assign({ 'Content-Type': ct || 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': '*', 'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS' }, extra || {}));
   res.end(text);
 }
 
@@ -452,7 +500,7 @@ function proxyInstance(targetName, adminPath) {
     const tcTls = tc.tls || {};
     const main = loadCfg('default');
     const mainPort = Number((main && main.listen || {}).port) || 16384;
-    // A TLS instance has no listener of its own: it lives behind the main port's HTTPS + /<name>/ prefix
+    // A TLS instance has no listener of its own: it lives behind the main port's HTTPS
     const useTls = !!tcTls.enable;
     const viaMain = targetName !== 'default' && (useTls || Number((tc.listen || {}).port || 16384) === mainPort);
     const port = viaMain ? mainPort : ((tc.listen || {}).port || 16384);
@@ -460,7 +508,10 @@ function proxyInstance(targetName, adminPath) {
 const tlsOpt = mod === https2 ? { rejectUnauthorized: false } : {}; // loopback targets are signed by the private CA
     const targetPanel = panelAuth.read(tc, targetName);
     const webToken = (targetPanel && targetPanel.adminToken) || tc.webToken || '';
-    const prefix = viaMain ? '/' + encodeURIComponent(targetName) : '';
+    // The target process accepts admin calls only under its secret panel prefix; the sid lives in the
+    // shared state file, so a sibling process on the same data dir answers the same URL.
+    let prefix = '';
+    try { prefix = '/' + panelAuth.ensure(tc, targetName).sid; } catch (_) {}
     const tryAdmin = () => {
       const opts = Object.assign({ host: '127.0.0.1', port, path: prefix + '/admin/api/' + adminPath, method: 'GET', timeout: 5000 }, tlsOpt);
       if (webToken) opts.headers = { 'x-agw-token': webToken };
@@ -846,115 +897,129 @@ function saveAnnouncements(items) {
 }
 
 async function handleAdmin(cfg, req, res, u, p, bodyStr) {
-// /admin was the original built-in panel; it is retired -- the M3 panel under /auth is the only UI now.
-// The path stays as an alias so old bookmarks keep working; ?key= (webToken) survives the hop.
-  if (p === '/admin' || p === '/admin/') {
-    if (req.method !== 'GET' && req.method !== 'HEAD') return textRes(res, 405, '不支持的方法: ' + req.method + ' ' + p);
-    const key = (u.searchParams && u.searchParams.get('key')) || '';
-    res.writeHead(302, { Location: '/auth' + (key ? '?key=' + encodeURIComponent(key) : ''), 'Cache-Control': 'no-store' });
-    return res.end();
-  }
+// The secret sid is part of the URL prefix (/<sid>/admin/...): surface.js stripped it and
+// recorded it on the request, so every redirect here rebuilds the same shape.
+  const inst = cfg._name || currentName(cfg);
+  const panelState = panelStateOf(cfg);
+  const sid = (req && req._panelSid) || (panelState && panelState.sid) || '';
+  const base = sid ? '/' + sid + '/admin' : '';
+  const method = req.method;
+  const noStore = { 'Cache-Control': 'no-store, no-cache, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0' };
+  const htmlErr = (status, title, msg) => textRes(res, status,
+    '<!doctype html><meta charset="utf-8"><title>' + title + '</title>'
+    + '<body style="font-family:system-ui,sans-serif;background:#141218;color:#e6e1e5;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">'
+    + '<div style="max-width:560px;padding:24px;line-height:1.8">' + msg + '</div></body>',
+    'text/html; charset=utf-8', noStore);
 
-// /auth -- M3 admin panel entry: a valid panel session cookie; new links use /auth/<session-id>/<token>
-// The normal entry is the one-time link printed by: agw web login
-  const m3KeyOk = () => checkAdminAuth(cfg, req, u.searchParams, { panel: true });
-// A successful login issues a separate HttpOnly browser session cookie; the path token itself is one-shot.
-  const issueWebSess = () => {
+// ---- session helpers: prune stale entries, cap the map, persist on every change ----
+  const sessMapOf = () => panelAuth.sessionsOf(cfg, inst) || (cfg._webSess = cfg._webSess || new Map());
+  const delSess = (map, k) => { if (map.delete) map.delete(k); else delete map[k]; };
+  const issueWebSess = (login) => {
     const now = Date.now();
-    const panelState = panelStateOf(cfg);
-    // Prefer the persistent per-instance sessions map (survives hot restarts / worker swaps);
-    // fall back to the in-memory map only when the state file is unavailable.
-    const sessMap = panelAuth.sessionsOf(cfg, cfg._name || currentName(cfg)) || (cfg._webSess = cfg._webSess || new Map());
-    const set = (k, v) => { if (sessMap.set) sessMap.set(k, v); else sessMap[k] = v; };
-    const del = (k) => { if (sessMap.delete) sessMap.delete(k); else delete sessMap[k]; };
-    for (const [k, v] of (sessMap.entries ? sessMap : Object.entries(sessMap))) {
+    const map = sessMapOf();
+    for (const [k, v] of (map.entries ? map : Object.entries(map))) {
       const exp = typeof v === 'number' ? v : Number(v && v.exp) || 0;
-      const stale = v && v.panelSid && (!panelState || v.panelSid !== panelState.sid);
-      if (exp <= now || stale) del(k);
+      const stale = v && typeof v === 'object' && v.panelSid && (!panelState || v.panelSid !== panelState.sid);
+      if (exp <= now || stale) delSess(map, k);
     }
-    if (Object.keys(sessMap).length >= 64 || (sessMap.size != null && sessMap.size >= 64)) del(sessMap.keys ? sessMap.keys().next().value : Object.keys(sessMap)[0]);
-    const sid = require('crypto').randomBytes(32).toString('base64url');
-    set(sid, { exp: now + 7 * 864e5, panelSid: panelState ? panelState.sid : '' });
-    try { panelAuth.sessionsSave(cfg, cfg._name || currentName(cfg)); } catch (_) {}
+    if ((map.size != null ? map.size : Object.keys(map).length) >= 64) delSess(map, map.keys ? map.keys().next().value : Object.keys(map)[0]);
+    const raw = crypto2.randomBytes(32).toString('base64url');
+    const ent = { exp: now + (login ? 7 * 864e5 : 15 * 60e3), panelSid: panelState ? panelState.sid : '' };
+    if (login) ent.login = true; else ent.pending = true;
+    if (map.set) map.set(raw, ent); else map[raw] = ent;
+    try { panelAuth.sessionsSave(cfg, inst); } catch (_) {}
     const secure = !!(req.socket && req.socket.encrypted) || ((req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https');
-    return `${sessCookieName(cfg)}=${sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800${secure ? '; Secure' : ''}`;
+    return `${sessCookieName(cfg)}=${raw}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${login ? 604800 : 900}${secure ? '; Secure' : ''}`;
   };
-  const withSess = () => ({
-    'Cache-Control': 'no-store, no-cache, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0', 'Access-Control-Allow-Origin': '*',
-  });
-  const authDeny = () => textRes(res, 401, '<!doctype html><meta charset="utf-8"><title>401</title>'
-    + '<body style="font-family:sans-serif;background:#1c1b1f;color:#e6e1e5;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">'
-    + '<div>⚠️ 需要登录: 请在服务器执行 <code>agw web login</code> 获取一次性登录链接</div></body>', 'text/html; charset=utf-8');
+  const upgradeSess = (ent) => {
+    const map = sessMapOf();
+    const cur = map.get ? map.get(ent.sid) : map[ent.sid];
+    if (!cur) return false;
+    const next = Object.assign({}, typeof cur === 'object' ? cur : {}, { exp: Date.now() + 7 * 864e5, panelSid: panelState ? panelState.sid : '', login: true });
+    delete next.pending; delete next.tries;
+    if (map.set) map.set(ent.sid, next); else map[ent.sid] = next;
+    try { panelAuth.sessionsSave(cfg, inst); } catch (_) {}
+    return true;
+  };
 
-// /auth/<session-id>/<token> -- one-time link generated by agw web login.
-// The session-id is regenerated whenever the gateway starts; the token is regenerated by every login command.
-  const pm = (req.method === 'GET') && p.match(/^\/auth\/([A-Za-z0-9_-]{16,128})\/([A-Za-z0-9_-]{8,256})\/?$/);
-  if (pm) {
-    const [, sid, tok] = pm;
-    const okLink = panelAuth.verify(cfg, cfg._name || currentName(cfg), sid, tok);
-    // One-time link consumed (or already used): switch to the cookie session. Redirect to /auth so a
-    // refresh hits the session-cookie path instead of re-verifying the one-time token -> no 401 on F5.
-    // An already-used link still goes through when the browser holds a valid session cookie.
-    if (!okLink && !checkAdminAuth(cfg, req, u.searchParams, { panel: true })) return textRes(res, 401, '<!doctype html><meta charset="utf-8"><title>401</title>'
-      + '<body style="font-family:sans-serif;background:#1c1b1f;color:#e6e1e5;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">'
-      + '<div>⚠️ Login link invalid or already used; run <code>agw web login</code> again on the server</div></body>', 'text/html; charset=utf-8');
-    res.writeHead(302, { 'Location': '/auth', 'Cache-Control': 'no-store', 'Set-Cookie': issueWebSess() });
+// ---- 0) bare /admin (compat ports only; the main port gates before this): normalise the slash ----
+  if (p === '/admin') {
+    if (method !== 'GET' && method !== 'HEAD') return textRes(res, 405, '不支持的方法: ' + method + ' ' + p);
+    if (!sid) return htmlErr(404, '404', 'not found');
+    const ent = readSessEnt(cfg, req);
+    if (ent && ent.login === true) { res.writeHead(302, { Location: base + '/', ...noStore }); return res.end(); }
+    if (ent && ent.pending) { res.writeHead(302, { Location: base + '/login', ...noStore }); return res.end(); }
+    return htmlErr(401, '401', '没有有效会话。请在服务器执行 <code>agw web login</code> 取得一次性登录链接。');
+  }
+
+// ---- 1) login-info (matched before the one-time token shape: "login-info" fits it too) ----
+  if (p === '/admin/login-info') {
+    if (method !== 'GET') return jsonRes(res, 405, { error: '只支持 GET', Allow: 'GET' });
+    const ent = readSessEnt(cfg, req);
+    if (!ent) return jsonRes(res, 401, { error: '需要先通过一次性登录链接进入' });
+    const aa = cfg.adminAuth || {};
+    return jsonRes(res, 200, { ok: true, keyRequired: adminKeysOf(cfg).length > 0, secondKey: !!aa.secondKey, totp: !!aa.totpSecret, login: ent.login === true });
+  }
+
+// ---- 2) login page /admin/login: admin card key + second factor -> session cookie ----
+  if (p === '/admin/login' || p === '/admin/login/') {
+    const ent = readSessEnt(cfg, req);
+    if (method === 'GET' || method === 'HEAD') {
+      if (!sid) return htmlErr(404, '404', 'not found');
+      if (ent && ent.login === true) { res.writeHead(302, { Location: base + '/', ...noStore }); return res.end(); }
+      if (!ent) return htmlErr(401, '401', '登录链接已失效。请在服务器重新执行 <code>agw web login</code>。');
+      const f = path.join(CORE, 'm3', 'login.html');
+      if (!fs.existsSync(f)) return textRes(res, 404, '登录页缺失: m3/login.html');
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', ...noStore, 'Referrer-Policy': 'no-referrer' });
+      return res.end(fs.readFileSync(f));
+    }
+    if (method !== 'POST') return textRes(res, 405, '不支持的方法: ' + method + ' ' + p, null, noStore);
+    if (!sid) return jsonRes(res, 404, { error: 'not found' });
+    if (!ent) return jsonRes(res, 401, { error: '登录链接已失效, 请重新执行 agw web login' });
+    if (ent.login === true) return jsonRes(res, 200, { ok: true, redirect: base + '/' });
+    let j = {}; try { j = JSON.parse(bodyStr || '{}'); } catch (_) {}
+    const aa = cfg.adminAuth || {};
+    const keys = adminKeysOf(cfg);
+    const keyOk = keys.length === 0 || keys.some(k => panelAuth.safeEqual(k.key, String(j.key || '')));
+    const secondOk = (!aa.secondKey && !aa.totpSecret)
+      || (!!aa.secondKey && panelAuth.safeEqual(aa.secondKey, String(j.secondKey || '')))
+      || (!!aa.totpSecret && totpVerify(aa.totpSecret, String(j.totp || '')));
+    if (!keyOk || !secondOk) {
+      const map = sessMapOf();
+      const cur = map.get ? map.get(ent.sid) : map[ent.sid];
+      const tries = (Number(cur && cur.tries) || 0) + 1;
+      if (cur && tries >= 5) {
+        delSess(map, ent.sid);
+        try { panelAuth.sessionsSave(cfg, inst); } catch (_) {}
+        return jsonRes(res, 401, { error: '尝试次数过多, 请重新执行 agw web login 获取登录链接' });
+      }
+      if (cur && typeof cur === 'object') { cur.tries = tries; try { panelAuth.sessionsSave(cfg, inst); } catch (_) {} }
+      return jsonRes(res, 401, { error: keys.length ? '管理员卡密或二次验证不正确' : '二次验证不正确' });
+    }
+    upgradeSess(ent);
+    return jsonRes(res, 200, { ok: true, redirect: base + '/' });
+  }
+
+// ---- 3) one-time login link /admin/<token> (issued by agw web login) ----
+  const om = (method === 'GET' || method === 'HEAD') && p.match(/^\/admin\/([A-Za-z0-9_-]{8,256})\/?$/);
+  if (om) {
+    if (!sid) return htmlErr(404, '404', 'not found');
+    const okLink = panelAuth.verify(cfg, inst, sid, om[1]);
+    if (!okLink) {
+      const ent = readSessEnt(cfg, req);
+      if (ent && ent.login === true) { res.writeHead(302, { Location: base + '/', ...noStore }); return res.end(); }
+      if (ent && ent.pending) { res.writeHead(302, { Location: base + '/login', ...noStore }); return res.end(); }
+      return htmlErr(401, '401', '登录链接无效或已被使用。请在服务器重新执行 <code>agw web login</code>。');
+    }
+// One-time link consumed. Card-key instances go through the login page; keyless ones get the
+// session directly, exactly like before this change.
+    if (needsPanelLogin(cfg)) res.writeHead(302, { Location: base + '/login', ...noStore, 'Set-Cookie': issueWebSess(false) });
+    else res.writeHead(302, { Location: base + '/', ...noStore, 'Set-Cookie': issueWebSess(true) });
     return res.end();
   }
 
-// /auth (the panel itself; visit with ?key=<access token>; also issues a session cookie)
-  if (req.method === 'GET' && (p === '/auth' || p === '/auth/')) {
-    if (!m3KeyOk()) return authDeny();
-    const f = path.join(CORE, 'm3', 'index.html');
-    if (!fs.existsSync(f)) return textRes(res, 404, 'M3 面板未找到, 请把 index.html 放到 ' + path.join(CORE, 'm3'));
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store, no-cache, must-revalidate', 'Pragma': 'no-cache', 'Expires': '0', ...withSess() });
-    return res.end(fs.readFileSync(f, 'utf8'));
-  }
-// /auth/<static> -- vendor JS / fonts etc. (nothing sensitive, no token check, browser-cache friendly)
-// Safety: (1) must stay inside the m3 directory (no .. traversal) and must be a file;
-//         (2) extension whitelist -- only static asset types are served, never arbitrary files
-//             that might later land in m3/ (config backups, notes, keys).
-  if (req.method === 'GET' && p.startsWith('/auth/')) {
-    let rel;
-    try { rel = decodeURIComponent(p.slice('/auth/'.length)); } catch (e) { rel = ''; }
-    const root = path.join(CORE, 'm3');
-    const f = path.join(root, rel);
-    const extWl = ['.js', '.mjs', '.css', '.json', '.map', '.woff2', '.woff', '.ttf', '.svg', '.png', '.webp', '.html', '.ico', '.txt'];
-    if (rel && !rel.includes('\0') && f.startsWith(root + path.sep)
-        && extWl.includes(path.extname(rel).toLowerCase())
-        && fs.existsSync(f) && fs.statSync(f).isFile()) {
-      const ext = path.extname(f).toLowerCase();
-      const isApp = rel === 'app.js' || rel === 'app.css'; // 面板本体: 不缓存, 改完刷新即生效
-      const MIME = { '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
-        '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',
-        '.map': 'application/json; charset=utf-8', '.woff2': 'font/woff2', '.woff': 'font/woff',
-        '.ttf': 'font/ttf', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp' };
-      let buf = fs.readFileSync(f);
-      const hdr = {
-        'Content-Type': MIME[ext] || 'application/octet-stream',
-// The panel itself is never cached; vendor assets cache for a day (large and content-named)
-        'Cache-Control': (ext === '.html' || isApp) ? 'no-store, no-cache, must-revalidate' : 'public, max-age=86400',
-        'Access-Control-Allow-Origin': '*', 'Vary': 'Accept-Encoding',
-      };
-      if (isApp) { hdr['Pragma'] = 'no-cache'; hdr['Expires'] = '0'; }
-      // text assets >1KB when the client supports it -> gzip (the 288KB component bundle shrinks to ~56KB)
-      if (buf.length > 1024 && ['.js', '.mjs', '.css', '.json', '.map'].includes(ext)
-          && /\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
-        buf = zlib.gzipSync(buf, { level: 9 });
-        hdr['Content-Encoding'] = 'gzip';
-      }
-      hdr['Content-Length'] = buf.length;
-      res.writeHead(200, hdr);
-      return res.end(buf);
-    }
-    // missing file / traversal attempt: explicit 404, never null (callers would not write a response and the request would hang)
-    return textRes(res, 404, '面板资源不存在: ' + rel);
-  }
-  if (p.startsWith('/auth/')) return textRes(res, 405, '不支持的方法: ' + req.method + ' ' + p);
-
-// Everything below is /admin/api/* -> requires panel session cookie / local admin token / optional webToken
-  if (!p.startsWith('/admin/api/')) return null; // 不是管理路由, 交给后续
-
+// ---- 4) /admin/api/* -- JSON API: cookie session / admin token / webToken / admin card key ----
+  if (p.startsWith('/admin/api/')) {
   if (!checkAdminAuth(cfg, req, u.searchParams)) {
     return jsonRes(res, 401, { error: '认证失败' });
   }
@@ -1389,6 +1454,7 @@ async function handleAdmin(cfg, req, res, u, p, bodyStr) {
       redact: maskRedactCfg(c),
       replace: c.replace || { out: [], inc: [] },
       record: c.record || { enable: false, server: '' },
+      log: c.log || logfile.DEF,
       probe: c.probe || { enable: false, intervalMin: 10, mode: 'models' },
       keyLength: c.keyLength || 24,
       modelSync: c.modelSync || { enable: true, intervalHours: 24 },
@@ -1470,6 +1536,11 @@ async function handleAdmin(cfg, req, res, u, p, bodyStr) {
         server: String(data.record.server || '').trim(),
         maxChars: Number(data.record.maxChars) > 0 ? Number(data.record.maxChars) : 200000,
       };
+    }
+// Gateway log file: buffered writes + a size cap (logfile.js), applied to the live writer at once
+    if (data.log !== undefined && data.log && typeof data.log === 'object') {
+      c.log = logfile.normalize(data.log);
+      try { logfile.configure(c.log); } catch (_) {}
     }
     if (data.proxies !== undefined) c.proxies = data.proxies;
 // Parameter override (instance level): empty/absent-clears; otherwise a non-empty object
@@ -1725,6 +1796,13 @@ expireAt: c.adminExpireAt || 0,      // panel session expiry (agw admin expire)
   }
 
 // ============ Key card management ============
+// User-management fields: list inputs are trimmed, bounded and keep only non-empty strings;
+// limits are whole positive numbers, 0/absent = unlimited.
+function cardList(v) { return permissions.list(v).slice(0, 200); }
+function cardLimit(v, max) {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n > 0 ? Math.min(max, n) : 0;
+}
 // GET /admin/api/keys/:inst -- key card list (fully visible to admins, including usage)
   if (req.method === 'GET' && api.startsWith('keys/')) {
     const name = decodeURIComponent(api.slice('keys/'.length));
@@ -1734,19 +1812,24 @@ expireAt: c.adminExpireAt || 0,      // panel session expiry (agw admin expire)
     const live = POOL && POOL.instances.get(name);
     const liveMap = {};
     if (live && Array.isArray(live.apiKeys)) for (const k of live.apiKeys) liveMap[k.key] = k.usedTokens || 0;
-    const keys = (c.apiKeys || []).map(k => ({
-      key: k.key, name: k.name || '', enable: k.enable !== false,
-      role: k.role === 'admin' ? 'admin' : 'user',
-      quotaTokens: Number(k.quotaTokens) || 0,
-      usedTokens: liveMap[k.key] !== undefined ? liveMap[k.key] : (Number(k.usedTokens) || 0),
-      models: k.models || [], channels: k.channels || [], branches: k.branches || [],
-      redact: k.redact == null ? null : !!k.redact,
-      expiresAt: k.expiresAt || '', note: k.note || '', createdAt: k.createdAt || '',
-    }));
+    const keys = (c.apiKeys || []).map(k => {
+      const rl = ratelimit.snapshot(k);
+      return ({
+        key: k.key, name: k.name || '', enable: k.enable !== false,
+        role: k.role === 'admin' ? 'admin' : 'user',
+        quotaTokens: Number(k.quotaTokens) || 0,
+        usedTokens: liveMap[k.key] !== undefined ? liveMap[k.key] : (Number(k.usedTokens) || 0),
+        rpm: Number(k.rpm) || 0, tpm: Number(k.tpm) || 0,
+        rpmUsed: rl.rpmUsed, tpmUsed: rl.tpmUsed,
+        models: k.models || [], channels: k.channels || [], branches: k.branches || [],
+        redact: k.redact == null ? null : !!k.redact,
+        expiresAt: k.expiresAt || '', note: k.note || '', createdAt: k.createdAt || '',
+      });
+    });
     return jsonRes(res, 200, { keys });
   }
 
-// POST /admin/api/keys/:inst -- issue a card {name, quotaTokens, models, channels, expiresAt, note} -> returns the full key
+// POST /admin/api/keys/:inst -- issue a card {name, role, quotaTokens, rpm, tpm, models, channels, branches, expiresAt, note} -> returns the full key
   if (req.method === 'POST' && /^keys\/[^/]+$/.test(api)) {
     const name = decodeURIComponent(api.slice('keys/'.length));
     const c = loadCfg(name);
@@ -1762,9 +1845,8 @@ expireAt: c.adminExpireAt || 0,      // panel session expiry (agw admin expire)
       role: data.role === 'admin' ? 'admin' : 'user',
       quotaTokens: Math.max(0, Number(data.quotaTokens) || 0),
       usedTokens: 0,
-      models: Array.isArray(data.models) ? data.models.map(s => String(s).trim()).filter(Boolean) : [],
-      channels: Array.isArray(data.channels) ? data.channels.map(s => String(s).trim()).filter(Boolean) : [],
-      branches: Array.isArray(data.branches) ? data.branches.map(s => String(s).trim()).filter(Boolean) : [],
+      rpm: cardLimit(data.rpm, 1000000), tpm: cardLimit(data.tpm, 1000000000),
+      models: cardList(data.models), channels: cardList(data.channels), branches: cardList(data.branches),
       expiresAt: String(data.expiresAt || '').trim(),
       note: String(data.note || '').trim().slice(0, 200),
       createdAt: new Date().toISOString(),
@@ -1776,7 +1858,7 @@ expireAt: c.adminExpireAt || 0,      // panel session expiry (agw admin expire)
     return jsonRes(res, 200, { ok: true, key: nk });
   }
 
-// POST /admin/api/keys-update/:inst -- edit a key card {key, enable?, quotaTokens?, addQuota?, resetUsage?, name?, models?, channels?, expiresAt?, note?}
+// POST /admin/api/keys-update/:inst -- edit a card {key, enable?, role?, quotaTokens?, addQuota?, resetUsage?, rpm?, tpm?, resetRate?, name?, models?, channels?, branches?, expiresAt?, note?}
   if (req.method === 'POST' && api.startsWith('keys-update/')) {
     const name = decodeURIComponent(api.slice('keys-update/'.length));
     const c = loadCfg(name);
@@ -1788,9 +1870,14 @@ expireAt: c.adminExpireAt || 0,      // panel session expiry (agw admin expire)
     if (data.role === 'admin' || data.role === 'user') k.role = data.role;
     if (data.quotaTokens !== undefined) k.quotaTokens = Math.max(0, Number(data.quotaTokens) || 0);
     if (data.name !== undefined) k.name = String(data.name).trim().slice(0, 64);
-    if (data.models !== undefined) k.models = Array.isArray(data.models) ? data.models.map(s => String(s).trim()).filter(Boolean) : [];
-    if (data.channels !== undefined) k.channels = Array.isArray(data.channels) ? data.channels.map(s => String(s).trim()).filter(Boolean) : [];
-    if (data.branches !== undefined) k.branches = Array.isArray(data.branches) ? data.branches.map(s => String(s).trim()).filter(Boolean) : [];
+/* Rate limits: editing either limit starts a fresh window, so raising a limit takes effect at once
+ * instead of waiting out the old one-minute counter. */
+    let limitsChanged = false;
+    if (data.rpm !== undefined) { const v = cardLimit(data.rpm, 1000000); if (v !== (Number(k.rpm) || 0)) limitsChanged = true; k.rpm = v; }
+    if (data.tpm !== undefined) { const v = cardLimit(data.tpm, 1000000000); if (v !== (Number(k.tpm) || 0)) limitsChanged = true; k.tpm = v; }
+    if (data.models !== undefined) k.models = cardList(data.models);
+    if (data.channels !== undefined) k.channels = cardList(data.channels);
+    if (data.branches !== undefined) k.branches = cardList(data.branches);
     if (data.redact !== undefined) k.redact = (data.redact == null) ? null : !!data.redact;
     if (data.expiresAt !== undefined) k.expiresAt = String(data.expiresAt || '').trim();
     if (data.note !== undefined) k.note = String(data.note).trim().slice(0, 200);
@@ -1800,6 +1887,7 @@ expireAt: c.adminExpireAt || 0,      // panel session expiry (agw admin expire)
     if (data.resetUsage) { k.usedTokens = 0; if (lk) lk.usedTokens = 0; }
     if (data.addQuota) { k.quotaTokens = (Number(k.quotaTokens) || 0) + Math.max(0, Number(data.addQuota) || 0); }
     try { saveCfg(name, c); } catch (e) { return jsonRes(res, 500, { error: '保存失败: ' + e.message }); }
+    if (limitsChanged || data.resetRate) { try { ratelimit.reset(k.key); } catch (_) {} }
     if (POOL) { try { hotReload(name); } catch (_) {} }
     syncKeysLive(name);
     return jsonRes(res, 200, { ok: true, hotReload: !!POOL });
@@ -1818,6 +1906,7 @@ expireAt: c.adminExpireAt || 0,      // panel session expiry (agw admin expire)
       c.apiKeys = (c.apiKeys || []).filter(x => x.key !== key);
       if (c.apiKeys.length < before) {
         try { saveCfg(name, c); } catch (e) { return jsonRes(res, 500, { error: '保存失败: ' + e.message }); }
+        try { ratelimit.drop(key); } catch (_) {}
         if (POOL) { try { hotReload(name); } catch (_) {} }
         syncKeysLive(name);
         return jsonRes(res, 200, { ok: true });
@@ -1970,6 +2059,13 @@ cfgCacheClear(); // the file name changed -> cache keys are stale; clear to avoi
     try { fs.renameSync(path.join(MLOG(), name + '.log'), path.join(MLOG(), newName + '.log')); } catch (_) {}
     try { fs.renameSync(path.join(MRUN(), name + '.pid'), path.join(MRUN(), newName + '.pid')); } catch (_) {}
     try { fs.renameSync(path.join(MLOG(), 'keyusage-' + name + '.json'), path.join(MLOG(), 'keyusage-' + newName + '.json')); } catch (_) {}
+    // logfile.js keeps an fd open: repoint the writer at the renamed file, otherwise it would keep
+    // appending to the old inode and the panel would read a file nobody writes to
+    try {
+      const st = logfile.stats();
+      const oldLog = path.join(MLOG(), name + '.log');
+      if (st.enabled && st.file === oldLog) logfile.install(path.join(MLOG(), newName + '.log'), st);
+    } catch (_) {}
 // 3) single-process mode: hot rename inside the pool (effective immediately; old port closed, new port listening)
     if (POOL) {
       try { POOL.renameInst(name, newName); }
@@ -2079,6 +2175,23 @@ if (name === currentName(cfg)) continue; // kill ourselves last
     return;
   }
 
+// GET/POST /admin/api/log-cfg/:name -- gateway log file settings + the live writer's state
+// Kept separate from POST /config so moving a slider never re-loads the instance.
+  if (api.startsWith('log-cfg/')) {
+    const name = decodeURIComponent(api.slice('log-cfg/'.length));
+    const c = loadCfg(name);
+    if (!c) return jsonRes(res, 404, { error: '实例不存在' });
+    if (req.method === 'POST') {
+      let data; try { data = JSON.parse(bodyStr || '{}'); } catch (e) { return jsonRes(res, 400, { error: 'JSON 无效' }); }
+      const next = logfile.normalize(data);
+      c.log = next;
+      try { saveCfg(name, c); } catch (e) { return jsonRes(res, 500, { error: '保存失败: ' + e.message }); }
+      try { logfile.configure(next); } catch (_) {}
+      return jsonRes(res, 200, Object.assign({ ok: true, saved: next }, logfile.stats()));
+    }
+    return jsonRes(res, 200, Object.assign({ ok: true, saved: c.log || logfile.DEF }, logfile.stats()));
+  }
+
 // GET /admin/api/logs/:name -- read logs
   if (req.method === 'GET' && api.startsWith('logs/')) {
     const name = decodeURIComponent(api.slice('logs/'.length));
@@ -2129,7 +2242,8 @@ function dashOf(c) {
     if (inst === currentName(cfg)) {
       return jsonRes(res, 200, Object.assign(dashOf(cfg), {
         requests: cfg._stats.requests, inflight: inflightOf(cfg), errors: cfg._stats.errors,
-        byChannel: cfg._stats.byChannel, byKey: cfg._stats.byKey || {}, byModel: cfg._stats.byModel || {}, daily: cfg._stats.daily || {}, startedAt: cfg._stats.startedAt,
+        byChannel: cfg._stats.byChannel, byKey: cfg._stats.byKey || {}, byModel: cfg._stats.byModel || {}, daily: cfg._stats.daily || {},
+        hourly: cfg._stats.hourly || {}, minutely: cfg._stats.minutely || {}, startedAt: cfg._stats.startedAt,
         uptime: Math.round(process.uptime()),
       }));
     }
@@ -2137,12 +2251,12 @@ function dashOf(c) {
     if (POOL) {
       const tc = POOL.instances.get(inst);
       if (!tc) return jsonRes(res, 404, { error: '实例未在运行: ' + inst });
-      return jsonRes(res, 200, Object.assign(dashOf(tc), { requests: tc._stats.requests, inflight: inflightOf(tc), errors: tc._stats.errors, retries: tc._stats.retries || 0, onceChannel: tc._onceChannel || null, byChannel: tc._stats.byChannel, byKey: tc._stats.byKey || {}, byModel: tc._stats.byModel || {}, daily: tc._stats.daily || {}, startedAt: tc._stats.startedAt, uptime: Math.round(process.uptime()) }));
+      return jsonRes(res, 200, Object.assign(dashOf(tc), { requests: tc._stats.requests, inflight: inflightOf(tc), errors: tc._stats.errors, retries: tc._stats.retries || 0, onceChannel: tc._onceChannel || null, byChannel: tc._stats.byChannel, byKey: tc._stats.byKey || {}, byModel: tc._stats.byModel || {}, daily: tc._stats.daily || {}, hourly: tc._stats.hourly || {}, minutely: tc._stats.minutely || {}, startedAt: tc._stats.startedAt, uptime: Math.round(process.uptime()) }));
     }
     const j = await proxyInstance(inst, 'stats');
     if (!j) return jsonRes(res, 404, { error: '无法获取实例 ' + inst + ' 的统计(可能未运行或无可用管理令牌)' });
     const st = j.stats ? j.stats : j;
-    return jsonRes(res, 200, Object.assign({ requests: st.requests || 0, errors: st.errors || 0, byChannel: st.byChannel || {}, byModel: st.byModel || {}, daily: st.daily || {}, startedAt: j.startedAt, uptime: j.uptime || 0 }, { version: j.version, listen: j.listen, channels: j.channels, probe: j.probe }));
+    return jsonRes(res, 200, Object.assign({ requests: st.requests || 0, errors: st.errors || 0, byChannel: st.byChannel || {}, byModel: st.byModel || {}, daily: st.daily || {}, hourly: st.hourly || {}, minutely: st.minutely || {}, startedAt: j.startedAt, uptime: j.uptime || 0 }, { version: j.version, listen: j.listen, channels: j.channels, probe: j.probe }));
   }
 
 // GET /admin/api/stats-all -- every instance in one shot (the app's stats tab)
@@ -2224,6 +2338,59 @@ function dashOf(c) {
   }
 
   return jsonRes(res, 404, { error: '未知 API: ' + api });
+  }
+
+// ---- 5) panel page + static assets: a session is required (no cookie or token -> 401) ----
+  if (p === '/admin/' || p === '/admin/index.html') {
+    if (method !== 'GET' && method !== 'HEAD') return textRes(res, 405, '不支持的方法: ' + method + ' ' + p, null, noStore);
+    if (!panelSessionOk(cfg, req)) return htmlErr(401, '401', '需要登录。请使用 <code>agw web login</code> 生成的完整链接进入并完成登录。');
+    const f = path.join(CORE, 'm3', 'index.html');
+    if (!fs.existsSync(f)) return textRes(res, 404, 'M3 面板未找到, 请把 index.html 放到 ' + path.join(CORE, 'm3'));
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', ...noStore });
+    return res.end(fs.readFileSync(f));
+  }
+/* /admin/<static> -- panel JS / vendor bundle / fonts. Session required: the browser sends the
+ * cookie on every same-origin subresource; the login page itself is self-contained, so nothing
+ * under /admin/ needs to be public. Extension whitelist + m3 containment still apply. */
+  if (p.startsWith('/admin/')) {
+    if (method !== 'GET' && method !== 'HEAD') return textRes(res, 405, '不支持的方法: ' + method + ' ' + p, null, noStore);
+    if (!panelSessionOk(cfg, req)) return htmlErr(401, '401', '需要登录。');
+    let rel;
+    try { rel = decodeURIComponent(p.slice('/admin/'.length)); } catch (e) { rel = ''; }
+    const root = path.join(CORE, 'm3');
+    const f = path.join(root, rel);
+    const extWl = ['.js', '.mjs', '.css', '.json', '.map', '.woff2', '.woff', '.ttf', '.svg', '.png', '.webp', '.html', '.ico', '.txt'];
+    if (rel && !rel.includes('\0') && f.startsWith(root + path.sep)
+        && extWl.includes(path.extname(rel).toLowerCase())
+        && fs.existsSync(f) && fs.statSync(f).isFile()) {
+      const ext = path.extname(f).toLowerCase();
+      const isApp = rel === 'app.js' || rel === 'app.css'; // 面板本体: 不缓存, 改完刷新即生效
+      const MIME = { '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
+        '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',
+        '.map': 'application/json; charset=utf-8', '.woff2': 'font/woff2', '.woff': 'font/woff',
+        '.ttf': 'font/ttf', '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp' };
+      let buf = fs.readFileSync(f);
+      const hdr = {
+        'Content-Type': MIME[ext] || 'application/octet-stream',
+// The panel itself is never cached; vendor assets cache for a day (large and content-named)
+        'Cache-Control': (ext === '.html' || isApp) ? 'no-store, no-cache, must-revalidate' : 'public, max-age=86400',
+        'Access-Control-Allow-Origin': '*', 'Vary': 'Accept-Encoding',
+      };
+      if (isApp) { hdr['Pragma'] = 'no-cache'; hdr['Expires'] = '0'; }
+      // text assets >1KB when the client supports it -> gzip (the 288KB component bundle shrinks to ~56KB)
+      if (buf.length > 1024 && ['.js', '.mjs', '.css', '.json', '.map'].includes(ext)
+          && /\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
+        buf = zlib.gzipSync(buf, { level: 9 });
+        hdr['Content-Encoding'] = 'gzip';
+      }
+      hdr['Content-Length'] = buf.length;
+      res.writeHead(200, hdr);
+      return res.end(buf);
+    }
+    // missing file / traversal attempt: explicit 404, never a hanging response
+    return textRes(res, 404, '面板资源不存在: ' + rel, null, noStore);
+  }
+  return null;
 }
 
-module.exports = { handleAdmin, checkAdminAuth, setDir, setUpstreamModels, setSyncFn, setBalanceFn, setPool, setPlugins, saveCfg, totpCode, totpVerify, base32Encode };
+module.exports = { handleAdmin, checkAdminAuth, adminKeysOf, needsPanelLogin, panelSessionOk, readSessEnt, setDir, setUpstreamModels, setSyncFn, setBalanceFn, setPool, setPlugins, saveCfg, totpCode, totpVerify, base32Encode };

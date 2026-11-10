@@ -17,9 +17,7 @@ const RESERVED_PATHS = new Set([
 // Panel routes: reachable even while the instance is stopped, otherwise stopping an instance
 // would also take away the panel that switches it back on.
 function isPanelPath(p) {
-  return p === '/admin' || p.startsWith('/admin/')
-    || p === '/auth' || p.startsWith('/auth/')
-    || p === '/profile' || p.startsWith('/profile/');
+  return p === '/admin' || p.startsWith('/admin/');
 }
 
 module.exports = { INST_NAME_RE, RESERVED_PATHS, isPanelPath };

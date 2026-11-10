@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 /* End-to-end parameter fidelity over real HTTP.
  * Scenario: a same-dialect channel with response redaction ON. That used to force every request
  * through the canonical hub, so parameters the hub does not model (cache_control, top_k, logprobs,
@@ -19,7 +20,7 @@ function eq(a, b, m) { ok(a === b, m + ' (got=' + JSON.stringify(a) + ' want=' +
 
 function post(port, route, body) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, path: route, method: 'POST', headers: { 'Content-Type': 'application/json' } }, res => {
+    const req = http.request({ host: '127.0.0.1', port, path: surface.spath(route), method: 'POST', headers: { 'Content-Type': 'application/json' } }, res => {
       const chunks = [];
       res.on('data', c => chunks.push(c));
       res.on('end', () => resolve({ status: res.statusCode, raw: Buffer.concat(chunks).toString('utf8') }));
@@ -39,6 +40,7 @@ async function startGateway(upPort, extra) {
   }, extra || {});
   fs.writeFileSync(cfgFile, JSON.stringify(cfgObj));
   const cfg = G.loadConfig(cfgFile);
+  surface.set(cfg);
   const started = await G.startServer(cfg, { host: '127.0.0.1', port: 0, multi: false });
   return { started, dir };
 }

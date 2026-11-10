@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 /* Circuit breaker test (channel-level cooldown, 2026-11-03)
  * chanA(default, healthy) + chanB(flaky: always 503 in phase 1, healthy in phase 2).
  * Each request uses a fresh API key so sticky affinity cannot pin a channel,
@@ -21,6 +22,7 @@ function ok(cond, msg) { if (cond) pass++; else { fail++; failures.push(msg); co
 
 async function runOne(enableBreaker, port) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agw-breaker-'));
+  require('./_surface').useDir(dir);
   const cfgPath = path.join(dir, 'config.json');
   const PORT_A = 45200 + Math.floor(Math.random() * 400), PORT_B = PORT_A + 1;
 
@@ -73,7 +75,7 @@ async function runOne(enableBreaker, port) {
   const reqJson = (key) => new Promise((resolve) => {
     const data = JSON.stringify({ model: 'gpt', messages: [{ role: 'user', content: 'hi' }] });
     const req = http.request({
-      host: '127.0.0.1', port, path: '/v1/chat/completions', method: 'POST',
+      host: '127.0.0.1', port, path: surface.spath('/v1/chat/completions'), method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data), Authorization: 'Bearer ' + key },
     }, res => {
       const cs = []; res.on('data', c => cs.push(c));

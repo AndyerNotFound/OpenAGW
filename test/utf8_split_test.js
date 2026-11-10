@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 /* UTF-8 split-chunk regression: a multi-byte char must survive TCP packet boundaries
    on BOTH legs (client->gateway request body, upstream->gateway reply). */
 const net = require('net');
@@ -44,6 +45,7 @@ const ok = (c, m) => { if (c) pass++; else { fail++; console.error('  ✗ ' + m)
   });
 
   const cfg = G.loadConfig(cfgFile);
+  surface.set(cfg);
   cfg.channels[0].baseUrl = 'http://127.0.0.1:' + upstream.port;
   const started = await G.startServer(cfg, { host: '127.0.0.1', port: 0, multi: false });
   const port = started.port;
@@ -54,7 +56,7 @@ const ok = (c, m) => { if (c) pass++; else { fail++; console.error('  ✗ ' + m)
   const cut = payload.indexOf('"content":"') + '"content":"'.length + 1;
   const resp = await new Promise((resolve, reject) => {
     const sock = net.connect(port, '127.0.0.1', () => {
-      sock.write('POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: ' + buf.length + '\r\nConnection: close\r\n\r\n');
+      sock.write('POST ' + surface.spath('/v1/chat/completions') + ' HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: ' + buf.length + '\r\nConnection: close\r\n\r\n');
       sock.write(buf.slice(0, cut));
       setTimeout(() => sock.write(buf.slice(cut)), 50);
     });

@@ -16,6 +16,8 @@ const { tokOf, sendError, corsHeaders, pickChannels, globMatch, forcedChannelNam
 const { upstreamRequest, joinUrl } = require('./upstream');
 const { respRedactOn, wrapRedactWriter, redactText, redactDeep } = require('./redact');
 const { isConnErr, makeFreshAgents } = require('./proxy');
+const permissions = require('./permissions');
+const ratelimit = require('./ratelimit');
 
 // ================= Request recording / token stats =================
 /* ================= Request recording (config.record: {enable, server, maxChars}) ================= */
@@ -24,6 +26,22 @@ function instName(cfg) {
   const bn = cfg._configFile ? path.basename(cfg._configFile, '.json') : 'config';
   return bn === 'config' ? 'default' : bn.replace(/^config\./, '');
 }
+/* Hour / minute buckets (2026-11-10): the panel can render the usage chart per day, per hour or per
+ * minute, so totals are accumulated at all three granularities. The two finer ones stay bounded --
+ * 7 days of hours, 4 hours of minutes -- because they live in memory and are flushed to
+ * stats-<inst>.json every statsFlushMin. Keys sort as strings (ISO prefix), so pruning is "drop the
+ * oldest keys"; the small slack keeps that from re-sorting on every single request. */
+const HOUR_KEEP = 24 * 7, MIN_KEEP = 240, BUCKET_SLACK = 16;
+function bucketAdd(map, key, keep) {
+  const b = map[key] || (map[key] = { requests: 0, errors: 0, inputTokens: 0, outputTokens: 0, cached: 0 });
+  const keys = Object.keys(map);
+  if (keys.length > keep + BUCKET_SLACK) {
+    keys.sort();
+    for (const k of keys.slice(0, keys.length - keep)) delete map[k];
+  }
+  return b;
+}
+
 // Write a record: POST JSON to the configured server when present (async, never blocks the response), otherwise append to local log/requests-<inst>.jsonl
 function writeRequestRecord(cfg, recCfg, rec) {
   const line = JSON.stringify(rec);
@@ -397,17 +415,15 @@ if (urlInfo.stream) canonical.stream = true; // gemini: the streaming flag lives
 /* Model reference (ported from ai-gateway-core): server.js resolved "instance:channel:model"
  * to a real model + pinned channel; routing/billing/logs all use the real name from here on */
   if (urlInfo.modelOverride) canonical.model = urlInfo.modelOverride;
-// Key card model whitelist (the plain name or the composite reference both match)
-  if (urlInfo.userKey && Array.isArray(urlInfo.userKey.models) && urlInfo.userKey.models.length
-      && !urlInfo.userKey.models.includes(canonical.model)
-      && !(urlInfo.rawModel && urlInfo.userKey.models.includes(urlInfo.rawModel))) {
-    return sendError(clientFormat, res, 403, '此卡密不允许使用模型: ' + canonical.model + ' (可用: ' + urlInfo.userKey.models.join(', ') + ')');
+// Key card model whitelist (plain name or composite reference both match; '*' wildcards allowed)
+  if (urlInfo.userKey && !permissions.allowsModel(urlInfo.userKey, canonical.model, urlInfo.rawModel)) {
+    return sendError(clientFormat, res, 403, '此卡密不允许使用模型: ' + canonical.model + ' (可用: ' + (permissions.list(urlInfo.userKey.models).join(', ') || '全部') + ')');
   }
-// Key card branch whitelist (only listed instances are reachable)
-  if (urlInfo.userKey && Array.isArray(urlInfo.userKey.branches) && urlInfo.userKey.branches.length) {
+// Key card instance whitelist: the issuing instance is implicit; a non-empty list replaces it
+  if (urlInfo.userKey) {
     const br = cfg._name || 'default';
-    if (!urlInfo.userKey.branches.includes(br)) {
-      return sendError(clientFormat, res, 403, '此卡密不允许访问分组: ' + br + ' (可用: ' + urlInfo.userKey.branches.join(', ') + ')');
+    if (!permissions.allowsBranch(urlInfo.userKey, br)) {
+      return sendError(clientFormat, res, 403, '此卡密不允许访问实例: ' + br + ' (可用: ' + (permissions.list(urlInfo.userKey.branches).join(', ') || '全部') + ')');
     }
   }
 // Card-level privacy overrides are applied earlier (inside redactDeep, ~line 2250); not repeated here
@@ -417,8 +433,29 @@ if (urlInfo.stream) canonical.stream = true; // gemini: the streaming flag lives
 // last channel that succeeded; a failure falls through to the round-robin order as before.
   const stickyKey = (urlInfo.userKey ? (urlInfo.userKey.key || urlInfo.userKey.name || 'anon') : 'anon') + '|' + canonical.model;
   const preferChannel = (cfg._lastChan && cfg._lastChan[stickyKey]) || '';
-  const candidates = pickChannels(cfg, canonical.model, urlInfo.forceChannel || forcedChannelName(cfg, req), preferChannel);
-  if (!candidates.length) return sendError(clientFormat, res, 503, 'no channel configured in config.json');
+  const allCandidates = pickChannels(cfg, canonical.model, urlInfo.forceChannel || forcedChannelName(cfg, req), preferChannel);
+  if (!allCandidates.length) return sendError(clientFormat, res, 503, 'no channel configured in config.json');
+/* Provider whitelist: a card may only be routed to channels it was granted. Filtering happens after
+ * routing so a model that only exists on a forbidden provider is a clear 403, not a silent fallback
+ * to a different provider (which would leak the model to a user who was denied that provider). */
+  const candidates = urlInfo.userKey
+    ? allCandidates.filter(c => permissions.allowsChannel(urlInfo.userKey, c.ch.name))
+    : allCandidates;
+  if (!candidates.length) {
+    return sendError(clientFormat, res, 403, '此卡密不允许使用提供商: ' + allCandidates.map(c => c.ch.name).join(', ')
+      + ' (可用提供商: ' + (permissions.list(urlInfo.userKey && urlInfo.userKey.channels).join(', ') || '全部') + ')');
+  }
+/* Rate limit admission: RPM counts the request; TPM reserves the prompt estimate, settled to real
+ * usage when the upstream call finishes. Rejected requests never reach the upstream or stats. */
+  const __estTok = urlInfo.userKey
+    ? Math.max(1, Math.round(analyzePrompt(canonical, Math.max(1, Number(cfg.charsPerToken) || 4)).total * calibRatio(cfg, canonical.model)))
+    : 0;
+  const rl = urlInfo.userKey ? ratelimit.admit(urlInfo.userKey, __estTok) : { ok: true, reservation: null };
+  if (!rl.ok) {
+    try { if (rl.retryAfter) res.setHeader('Retry-After', String(rl.retryAfter)); } catch (_) {}
+    return sendError(clientFormat, res, rl.status || 429, rl.error || 'rate limited');
+  }
+  const rlReservation = rl.reservation || null;
 
   stats.requests++;
 // Request recording (optional, off by default): wraps res.write/res.end to capture what was actually sent to the client
@@ -558,7 +595,11 @@ const respDist = { reasoning: 0, text: 0, tool: 0 }; // response-side distributi
           stats.byKey[kn].outputTokens += usageCapture.output;
           urlInfo.userKey.usedTokens = (urlInfo.userKey.usedTokens || 0) + usageCapture.input + usageCapture.output;
           cfg._keyUsageDirty = true;
+          if (urlInfo.keyOwner && urlInfo.keyOwner !== cfg) urlInfo.keyOwner._keyUsageDirty = true;
         }
+        try {
+          if (rlReservation) ratelimit.settle(rlReservation, (usageCapture.input || 0) + (usageCapture.output || 0), status < 400);
+        } catch (_) {}
         // Some reverse-proxy channels never send usage: fall back to the local estimate, otherwise the ball's context ring never moves
         const __cpt = Math.max(1, Number(cfg.charsPerToken) || 4);
         const __raw = analyzePrompt(canonical, __cpt);
@@ -575,13 +616,22 @@ const __pd = scaleDist(__raw.dist, __raw.total, usageCapture.input); // normaliz
           stats.byModel = stats.byModel || {};
           const __bm = stats.byModel[canonical.model] = stats.byModel[canonical.model] || { requests: 0, inputTokens: 0, outputTokens: 0, cached: 0 };
           __bm.requests++; __bm.inputTokens += __inTok; __bm.outputTokens += usageCapture.output || 0; __bm.cached += __cacheSaved;
-          const __day = new Date().toISOString().slice(0, 10);
+          const __iso = new Date().toISOString();
+          const __day = __iso.slice(0, 10);
           stats.daily = stats.daily || {};
           const __dd = stats.daily[__day] = stats.daily[__day] || { requests: 0, errors: 0, inputTokens: 0, outputTokens: 0, cached: 0, dist: { tools: 0, system: 0, user: 0, history: 0, reasoning: 0, text: 0, tool: 0 } };
           __dd.requests++; if (status >= 400) __dd.errors++;
           __dd.inputTokens += __inTok; __dd.outputTokens += usageCapture.output || 0; __dd.cached += __cacheSaved;
           for (const __k of ['tools', 'system', 'user', 'history']) __dd.dist[__k] += __pd[__k] || 0;
           __dd.dist.reasoning += __rdActual; __dd.dist.text += __textTok; __dd.dist.tool += __rd.tool;
+          // Same totals per hour and per minute: the stats page switches between 1D / 1H / 1M
+          const __outTok = usageCapture.output || 0, __err = status >= 400 ? 1 : 0;
+          stats.hourly = stats.hourly || {};
+          const __hh = bucketAdd(stats.hourly, __iso.slice(0, 10) + ' ' + __iso.slice(11, 13), HOUR_KEEP);
+          __hh.requests++; __hh.errors += __err; __hh.inputTokens += __inTok; __hh.outputTokens += __outTok; __hh.cached += __cacheSaved;
+          stats.minutely = stats.minutely || {};
+          const __mm = bucketAdd(stats.minutely, __iso.slice(0, 10) + ' ' + __iso.slice(11, 16), MIN_KEEP);
+          __mm.requests++; __mm.errors += __err; __mm.inputTokens += __inTok; __mm.outputTokens += __outTok; __mm.cached += __cacheSaved;
         } catch (__e) { try { logErr('[stat] 累加失败:', __e.message); } catch (_) {} }
         recordReq(status, ch.name, usageCapture.input, usageCapture.output);
       },

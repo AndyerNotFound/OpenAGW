@@ -1,8 +1,8 @@
 'use strict';
-/* admin_guard_test.js -- guards on the admin surface:
- *  1) /admin is a pure redirect to /auth now (the old inline page is gone) and /auth requires auth
- *  2) /auth/* static files are extension-whitelisted (no arbitrary m3/ files)
- *  3) /admin/api/* 401 response does not leak config hints
+/* admin_guard_test.js -- guards on the admin surface (secret-path model, 2026-11-10):
+ *  1) bare /admin and /auth are gone (404); the panel lives at /<sid>/admin/ and needs a session
+ *  2) panel static files are extension-whitelisted (no arbitrary m3/ files)
+ *  3) /admin/api/* without a cookie or token answers 401 and leaks nothing
  * Real HTTP, same style as panel_auth_test.js */
 const fs = require('fs');
 const os = require('os');
@@ -45,48 +45,60 @@ function request(port, p, headers = {}, method = 'GET', body = null) {
   const cfg = G.loadConfig(cfgFile);
   const started = await G.startServer(cfg, { host: '127.0.0.1', port: 0, multi: false });
   const port = started.port;
+  const st = panelAuth.ensure(cfg, 'default');
+  const A = `/${st.sid}/admin`;
 
-  // ---- Hole 1: /admin only redirects now; the M3 panel at /auth holds the auth gate ----
-  const anonAdmin = await request(port, '/admin');
-  ok(anonAdmin.status === 302, '匿名访问 /admin 重定向到面板 (旧内联页已移除)');
-  ok((anonAdmin.headers.location || '').split('?')[0] === '/auth', '/admin 的重定向目标是 /auth');
-  ok(anonAdmin.body === '', '重定向响应不带任何页面内容');
-  const keyHop = await request(port, '/admin?key=abc123');
-  ok((keyHop.headers.location || '') === '/auth?key=abc123', '/admin 转发时保留 ?key=');
-  const headAdmin = await request(port, '/admin', {}, 'HEAD');
-  ok(headAdmin.status === 302, 'HEAD /admin 与 GET 一致返回 302');
-  const postAdmin = await request(port, '/admin', {}, 'POST', '{}');
-  ok(postAdmin.status === 405, 'POST /admin 返回 405, 不会挂住连接');
-  const anonPanel = await request(port, '/auth');
-  ok(anonPanel.status === 401, '匿名访问 /auth 面板返回 401');
-  ok(!anonPanel.body.includes('AI Gateway'), '401 页不含管理页面内容');
+  // ---- 1) the old public entry points are closed ----
+  for (const p of ['/admin', '/admin/', '/auth', '/auth/app.js', '/auth/' + st.sid + '/x']) {
+    const r = await request(port, p);
+    ok(r.status === 404, '旧入口 ' + p + ' → 404 (got ' + r.status + ')');
+    ok(r.body === '' || !/OpenAGW 管理端|login-info/.test(r.body), '旧入口 ' + p + ' 不输出面板内容');
+  }
+  const badSid = 'A'.repeat(32);
+  ok((await request(port, `/${badSid}/admin/`)).status === 404, '未知 sid → 404');
+
+  // ---- 2) anonymous panel + assets + API ----
+  const anonPanel = await request(port, `${A}/`);
+  ok(anonPanel.status === 401, '匿名访问面板 → 401');
+  ok(!anonPanel.body.includes('OpenAGW 管理端'), '401 页不含面板内容');
+  ok((await request(port, `${A}/app.js`)).status === 401, '匿名访问面板资源 → 401');
+  ok((await request(port, `${A}/vendor/mw-v2.js`)).status === 401, '匿名访问组件库 → 401');
+  const denied = await request(port, `${A}/api/config/default`);
+  ok(denied.status === 401, '匿名访问管理 API → 401');
+  ok(!/webToken|config\.webToken|default 实例/i.test(denied.body), '401 响应不泄露配置线索');
+  ok((await request(port, `${A}/api/config/default`, { 'x-agw-token': 'wrong' })).status === 401, '错误 token → 401');
+  ok((await request(port, `${A}/login`)).status === 401, '没有一次性链接不能开登录页');
+  ok((await request(port, `${A}/login-info`)).status === 401, '没有待登录会话不能读 login-info');
+
+  // ---- 3) one-time link (keyless instance: no login page) ----
   const link = panelAuth.issue(cfg, 'default');
-  const login = await request(port, `/auth/${link.sid}/${link.token}`);
+  const login = await request(port, `/${link.sid}/admin/${link.token}`);
+  ok(login.status === 302, '一次性链接 → 302');
+  ok((login.headers.location || '') === `/${link.sid}/admin/`, '无卡密实例直接进面板');
   const cookie = (login.headers['set-cookie'] || []).map(x => x.split(';')[0]).join('; ');
-  ok((await request(port, '/admin', { cookie })).status === 302, '带会话 cookie 访问 /admin 同样重定向');
-  ok((await request(port, '/auth', { cookie })).status === 200, '带会话 cookie 可访问 /auth 面板');
+  ok(/agwSID(_\d+)?=/.test(cookie), '签发会话 cookie');
 
-  // ---- Hole 2: /auth/* static files extension whitelist ----
-  const bad = await request(port, '/auth/../admin.js');
-  ok(bad.status === 404 || bad.status === 401, '路径穿越 /auth/../admin.js 不可达');
-  const js = await request(port, '/auth/app.js');
-  ok(js.status === 200 || js.status === 404, 'app.js 可达或明确 404');
-  // the real check: a non-whitelisted extension inside m3/ must be refused
+  // ---- 4) panel asset policy with a session ----
+  ok((await request(port, `${A}/`, { cookie })).status === 200, '会话 cookie 可打开面板');
+  const js = await request(port, `${A}/app.js`, { cookie });
+  ok(js.status === 200 && /text\/javascript/.test(js.headers['content-type'] || ''), 'app.js 可达');
+  const bad = await request(port, `${A}/../admin.js`, { cookie });
+  ok(bad.status === 404, '路径穿越 /<sid>/admin/../admin.js 不可达');
   const m3 = path.join(path.dirname(cfgFile), 'm3');
   fs.mkdirSync(m3, { recursive: true });
   fs.writeFileSync(path.join(m3, 'secret.json.bak'), '{"k":"sensitive"}');
-  const bak = await request(port, '/auth/secret.json.bak');
-  ok(bak.status === 404, 'm3/ 下非白名单扩展名文件不可被匿名读取');
+  const bak = await request(port, `${A}/secret.json.bak`, { cookie });
+  ok(bak.status === 404, 'm3/ 下非白名单扩展名文件不可被读取');
 
-  // ---- Hole 3: 401 body must not leak config hints ----
-  const denied = await request(port, '/admin/api/config/default');
-  ok(denied.status === 401, '匿名访问管理 API 返回 401');
-  ok(!/webToken|config\.webToken|default 实例/i.test(denied.body), '401 响应不泄露配置线索');
-
-  // ---- regression: authorized access still works ----
+  // ---- 5) authorized API access still works ----
   const adminToken = panelAuth.read(cfg, 'default').adminToken;
-  ok((await request(port, '/admin/api/config/default', { 'x-agw-token': adminToken })).status === 200, 'adminToken 仍可访问管理 API');
-  ok((await request(port, '/admin/api/config/default', { cookie })).status === 200, '会话 cookie 仍可访问管理 API');
+  ok((await request(port, `${A}/api/config/default`, { 'x-agw-token': adminToken })).status === 200, 'adminToken 可访问管理 API');
+  ok((await request(port, `${A}/api/config/default`, { cookie })).status === 200, '会话 cookie 可访问管理 API');
+
+  // ---- 6) replay: with a session it bounces to the panel, without one it is 401 ----
+  const replay = await request(port, `/${link.sid}/admin/${link.token}`, { cookie });
+  ok(replay.status === 302 && replay.headers.location === `/${link.sid}/admin/`, '带会话重放 → 面板');
+  ok((await request(port, `/${link.sid}/admin/${link.token}`)).status === 401, '无会话重放 → 401');
 
   await new Promise(r => started.server.close(r));
   fs.rmSync(dir, { recursive: true, force: true });

@@ -14,20 +14,32 @@ const { upstreamRequest, joinUrl } = require('./upstream');
 const { isConnErr, makeFreshAgents } = require('./proxy');
 const { RETRYABLE } = require('./sync');
 const { redactText } = require('./redact');
+const permissions = require('./permissions');
 
 // ================= Extended OpenAI endpoint passthrough =================
 /* ================= Extended OpenAI endpoint passthrough (images/embeddings/audio/completions/moderations) ================= */
 // OpenAI-type channels only: forwards verbatim (JSON endpoints apply modelMap renames; multipart stays a Buffer), responses pass through; basic failover included
-function handleExtraEndpoint(cfg, req, res, pathname, bodyBuf, contentType, method) {
+function handleExtraEndpoint(cfg, req, res, pathname, bodyBuf, contentType, method, userKey) {
   const stats = cfg._stats;
   let model = '';
   let parsed = null;
   if (contentType && contentType.startsWith('application/json')) {
     try { parsed = JSON.parse(bodyBuf.toString('utf8')); model = (parsed && parsed.model) || ''; } catch (_) {}
   }
-  const candidates = pickChannels(cfg, model || undefined, forcedChannelName(cfg, req)).filter(c => c.ch.type === 'openai');
+// Card permissions apply to passthrough endpoints too: a model named in the body and the provider
+// that would serve it are checked before any upstream connection is opened.
+  if (userKey && model && !permissions.allowsModel(userKey, model)) {
+    stats.errors++;
+    return sendError('openai', res, 403, '此卡密不允许使用模型: ' + model + ' (可用: ' + (permissions.list(userKey.models).join(', ') || '全部') + ')');
+  }
+  const all = pickChannels(cfg, model || undefined, forcedChannelName(cfg, req)).filter(c => c.ch.type === 'openai');
+  const candidates = userKey ? all.filter(c => permissions.allowsChannel(userKey, c.ch.name)) : all;
   if (!candidates.length) {
     stats.errors++;
+    if (all.length && userKey) {
+      return sendError('openai', res, 403, '此卡密不允许使用提供商: ' + all.map(c => c.ch.name).join(', ')
+        + ' (可用提供商: ' + (permissions.list(userKey.channels).join(', ') || '全部') + ')');
+    }
     return sendError('openai', res, 503, 'no openai channel for extended endpoint ' + pathname + ' (扩展端点只支持 openai 类型渠道)');
   }
   stats.requests++;

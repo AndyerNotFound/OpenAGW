@@ -9,7 +9,8 @@ const crypto = require('crypto');
 const os = require('os');
 const zlib = require('zlib');
 const { loadConfig, normalizeProxy } = require('./config');
-const { logErr, VERSION } = require('./util');
+const { logErr, VERSION, setLogSink } = require('./util');
+const logfile = require('./logfile');
 const { saveKeyUsage, pickChannel, pickChannels, collectModels, globMatch, estimatePromptTokens, estimatePromptDist, analyzePrompt, calibRatio, calibUpdate, scaleDist, checkAuth, loadKeyUsage, keyUsageFile, keyCreditsJSON, genApiKey } = require('./router');
 const { flushStats, createInstancePool, poolLoadAll, poolLoadInstance, poolRemoveInstance, poolRenameInstance, poolRoute, RESERVED_PATHS, INST_NAME_RE } = require('./pool');
 const { startServer } = require('./server');
@@ -30,6 +31,7 @@ function flushAll(cfg) {
     try { flushStats(c); } catch (_) {}
   }
   try { rt.PLUGINS && rt.PLUGINS.flushAll(); } catch (_) {}
+  try { logfile.flush(); } catch (_) {}
 }
 
 function argPaths() {
@@ -52,11 +54,16 @@ function main() {
     logErr('Config load failed:', e.message);
     process.exit(1);
   }
+  /* Gateway-owned log file (see logfile.js): agw.sh passes AGW_LOG_FILE so the process can batch its
+   * writes and enforce the size cap the panel sets. Without it (bare `node gateway.js`, docker,
+   * nodejs-mobile) logging keeps going to stdout exactly as before. */
+  const logFile = String(process.env.AGW_LOG_FILE || '').trim();
+  if (logFile && logfile.install(logFile, cfg.log)) setLogSink(s => logfile.write(s));
   if (!cfg.channels.length) logErr('⚠ No valid channels in config; requests will return 503');
   process.on('unhandledRejection', e => logErr('unhandledRejection:', (e && e.message) || e));
   process.on('uncaughtException', e => logErr('uncaughtException:', (e && e.message) || e));
-  process.on('SIGTERM', () => { mdns.stopAll({ goodbye: true }); flushAll(cfg); process.exit(0); });
-  process.on('SIGINT', () => { mdns.stopAll({ goodbye: true }); process.exit(0); });
+  process.on('SIGTERM', () => { mdns.stopAll({ goodbye: true }); flushAll(cfg); logfile.stop(); process.exit(0); });
+  process.on('SIGINT', () => { mdns.stopAll({ goodbye: true }); flushAll(cfg); logfile.stop(); process.exit(0); });
 // hot restart: the replacement worker has already claimed the name, leave without goodbye packets
   hot.onDrain(() => mdns.stopAll({ goodbye: false }));
   // multi-instance by default (hosts every config*.json); AGW_SINGLE=1 or a port arg falls back to one instance

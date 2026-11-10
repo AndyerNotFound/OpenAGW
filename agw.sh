@@ -70,7 +70,7 @@ show_config() {
 }
 
 health_ok() {
-# The /health endpoint is closed (whitelist keeps only /v1 /v1beta /auth /profile /admin) -> probe the TCP port instead
+# /health is closed (the main port only answers the secret /<sid>/admin and /<user-sid>/<user-token> surfaces) -> probe the TCP port instead
   local port="$1"
   node -e 'const s=require("net").connect(+process.argv[1],"127.0.0.1");
 const f=c=>{try{s.destroy()}catch(_){}process.exit(c)};
@@ -87,10 +87,11 @@ list_instances() {
   done
 }
 
-# Log rotation (added 2026-11-09): gateway.log is opened with >> for the whole life of the process, so a
-# phone left running for weeks grew it without bound -- and every "agw logs" / panel refresh then had to
-# walk a file that size. Rotate once, cold-start only: at this point no process holds the file open, so
-# rewriting it is safe (renaming a live fd would keep writing the old inode and free nothing).
+# Log rotation (added 2026-11-09): gateway.log grew without bound, and every "agw logs" / panel refresh
+# then had to walk a file that size. A running gateway now caps the file itself (logfile.js, size set in
+# the panel); this cold-start pass stays as the safety net for logs written before that existed or by a
+# plain `node gateway.js`. Cold start only: no process holds the file open, so rewriting it is safe
+# (renaming a live fd would keep writing the old inode and free nothing).
 LOG_MAX_BYTES=8388608      # 8 MiB
 LOG_KEEP_BYTES=2097152     # keep the newest 2 MiB
 rotate_log() {
@@ -136,7 +137,9 @@ start_gw() {
   while [ "$w" -lt 10 ] && [ -n "$(gw_pids)" ]; do sleep 0.1; w=$((w+1)); done
   if [ ! -f "$DATA/config.json" ]; then echo "✗ Main config not found: $DATA/config.json"; return 1; fi
   rotate_log "$LOGFILE"
-  AGW_HOT="$AGW_HOT" nohup node "$DIR/gateway.js" >> "$LOGFILE" 2>&1 &
+  # AGW_LOG_FILE: the gateway then owns the file itself (batched writes + the size cap set in the
+  # panel, see logfile.js). The redirect stays for stderr (crash traces) and pre-install output.
+  AGW_HOT="$AGW_HOT" AGW_LOG_FILE="$LOGFILE" nohup node "$DIR/gateway.js" >> "$LOGFILE" 2>&1 &
   echo $! > "$PIDFILE"
 # Wait for the process to come up + poll /health (loading takes seconds with many instances)
   local waited=0

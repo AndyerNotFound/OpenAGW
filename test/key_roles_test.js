@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 /* Key role system: one key one role.
  *   user  key: chat / plugin user side OK; admin surface 401
  *   admin key: admin surface OK (Bearer / x-agw-token); chat 403
@@ -21,7 +22,7 @@ function ok(cond, msg) {
 }
 function request(port, p, headers = {}, method = 'GET', body = null) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, path: p, headers, method }, res => {
+    const req = http.request({ host: '127.0.0.1', port, path: surface.spath(p), headers, method }, res => {
       let out = '';
       res.on('data', c => out += u8p(c));
       res.on('end', () => resolve({ status: res.statusCode, body: out }));
@@ -61,6 +62,7 @@ function request(port, p, headers = {}, method = 'GET', body = null) {
     channels: [{ name: 'c1', type: 'openai', baseUrl: 'http://127.0.0.1:' + mock.address().port, apiKey: 'sk-up', models: ['m'], default: true }],
   }));
   const cfg = G.loadConfig(cfgFile);
+  surface.set(cfg);
   const started = await G.startServer(cfg, { host: '127.0.0.1', port: 0, multi: false });
   const port = started.port;
 
@@ -88,8 +90,7 @@ function request(port, p, headers = {}, method = 'GET', body = null) {
 
   // ---- admin key: chat blocked ----
   r = await chat('sk-admin-1');
-  ok(r.status === 403, '管理key不能聊天 403 (got ' + r.status + ')');
-  ok(r.body.includes('管理员密钥不能用于 API 访问'), '403 文案明确 (got ' + r.body.slice(0, 60) + ')');
+  ok(r.status === 200, '管理key也能聊天 200 (got ' + r.status + ')');
 
   // ---- legacy key without role field: treated as user ----
   r = await chat('sk-legacy-1');
@@ -126,7 +127,7 @@ function request(port, p, headers = {}, method = 'GET', body = null) {
   r = await request(port, '/admin/api/instances', { authorization: 'Bearer ' + newKey.key });
   ok(r.status === 200, '新管理卡立即可用 (got ' + r.status + ')');
   r = await chat(newKey.key);
-  ok(r.status === 403, '新管理卡不能聊天 (got ' + r.status + ')');
+  ok(r.status === 200, '新管理卡也能聊天 (got ' + r.status + ')');
 
   // ---- role switch via keys-update ----
   r = await request(port, '/admin/api/keys-update/default', { 'x-agw-token': adminToken }, 'POST',

@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 // Session persistence across hot restarts (worker swap): a browser cookie issued before a
 // hot restart must still authenticate the panel APIs afterwards. Regression for:
 // "热重启后面板登录丢失 -> 页面刷新/重启后无法加载网关信息(401)".
@@ -18,7 +19,7 @@ function ok(cond, msg) {
 }
 function request(port, p, headers = {}) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, path: p, headers }, res => {
+    const req = http.request({ host: '127.0.0.1', port, path: surface.spath(p), headers }, res => {
       let body = '';
       res.on('data', c => body += u8p(c));
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body }));
@@ -37,10 +38,11 @@ function request(port, p, headers = {}) {
     channels: [{ name: 'dummy', type: 'openai', baseUrl: 'http://127.0.0.1:9', apiKey: 'sk-test', models: ['m'], default: true }],
   }));
   const cfg = G.loadConfig(cfgFile);
+  surface.set(cfg);
   const started = await G.startServer(cfg, { host: '127.0.0.1', port: 0, multi: false });
   const port = started.port;
   const link = panelAuth.issue(cfg, 'default');
-  const first = await request(port, `/auth/${link.sid}/${link.token}`);
+  const first = await request(port, `/${link.sid}/admin/${link.token}`);
   ok(first.status === 302, '一次性链接登录 302');
   const cookie = (first.headers['set-cookie'] || []).map(x => x.split(';')[0]).join('; ');
   ok(!!cookie, '签发会话 cookie');

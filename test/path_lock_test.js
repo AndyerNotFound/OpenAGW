@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 /* Channel-level `path` lock + fixed passthrough behavior.
  * - path set: every request (chat, messages, responses, images, unknown /v1/*)
  *   goes to baseUrl + path; client path and query are ignored.
@@ -54,13 +55,14 @@ function responsesBody() {
     ],
   }));
   const cfg = G.loadConfig(cfgFile);
+  surface.set(cfg);
   eq(cfg.channels[0].path, '/custom/chat?fixed=1', '配置加载: path 自动补前导 /');
   eq(cfg.channels[1].path, null, '配置加载: 未配置 path = null');
 
   const started = await G.startServer(cfg, { host: '127.0.0.1', port: 0, multi: false });
   const port = started.port;
   const post = (route, body) => new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, path: route, method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer x' } }, res => {
+    const req = http.request({ host: '127.0.0.1', port, path: surface.spath(route), method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer x' } }, res => {
       const chunks = []; res.on('data', c => chunks.push(c)); res.on('end', () => resolve({ status: res.statusCode, raw: Buffer.concat(chunks).toString('utf8') }));
     });
     req.on('error', reject); req.end(body);

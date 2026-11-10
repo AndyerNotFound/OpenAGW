@@ -14,8 +14,25 @@ const VERSION = '1.4.8';
 
 /* ================= Small utilities ================= */
 function ts() { return new Date().toISOString().slice(11, 19); }
-function log(...a) { console.log('[' + ts() + ']', ...a); }
-function logErr(...a) { console.error('[' + ts() + ']', ...a); }
+/* Log sink (2026-11-10): when the gateway owns its log file (logfile.js, installed by gateway.js when
+ * AGW_LOG_FILE is set), every line goes there instead of stdout, so writes can be batched and the file
+ * kept under its size cap. Without a sink both helpers print exactly as before. */
+let logSink = null;
+function setLogSink(fn) { logSink = typeof fn === 'function' ? fn : null; }
+function logArg(x) {
+  if (typeof x === 'string') return x;
+  if (x instanceof Error) return x.stack || x.message;
+  try { return require('util').inspect(x, { depth: 3, breakLength: Infinity, compact: true }); } catch (_) { return String(x); }
+}
+function logLine(a) { return '[' + ts() + '] ' + a.map(logArg).join(' ') + '\n'; }
+function log(...a) {
+  if (logSink && logSink(logLine(a))) return;
+  console.log('[' + ts() + ']', ...a);
+}
+function logErr(...a) {
+  if (logSink && logSink(logLine(a))) return;
+  console.error('[' + ts() + ']', ...a);
+}
 
 const { StringDecoder } = require('string_decoder');
 /* *Chunk-safe decoding (2026-09-18): when a multi-byte character is split across TCP chunks, per-chunk toString('utf8') produces
@@ -108,4 +125,4 @@ function normStop(v) {
   return [String(v)];
 }
 
-module.exports = { http, https, net, tls, fs, path, crypto, os, zlib, VERSION, ts, log, logErr, utf8, hdrName, randId, nowSec, safeParse, rpCompile, rpApplyText, rpWalk, toText, normStop };
+module.exports = { http, https, net, tls, fs, path, crypto, os, zlib, VERSION, ts, log, logErr, setLogSink, utf8, hdrName, randId, nowSec, safeParse, rpCompile, rpApplyText, rpWalk, toText, normStop };

@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 /* Cross-format SSE conversion + response redaction at pathological chunk boundaries.
  * Upstream writes one byte at a time (UTF-8 characters and CRLF get split) and the
  * final event has no trailing newline. Nothing may be lost on the conversion path. */
@@ -45,7 +46,7 @@ function rawUpstream(scripts) {
 function post(port, route, body) {
   return new Promise((resolve, reject) => {
     const req = http.request({
-      host: '127.0.0.1', port, path: route, method: 'POST',
+      host: '127.0.0.1', port, path: surface.spath(route), method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer x', 'x-api-key': 'x' },
     }, res => {
       const chunks = [];
@@ -102,6 +103,7 @@ async function startGateway(upPort, extra) {
   }, extra || {});
   fs.writeFileSync(cfgFile, JSON.stringify(cfgObj));
   const cfg = G.loadConfig(cfgFile);
+  surface.set(cfg);
   const started = await G.startServer(cfg, { host: '127.0.0.1', port: 0, multi: false });
   return { started, dir };
 }

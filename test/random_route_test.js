@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 /* Random routing test (2026-11-03)
  * routeRandom=true: no sticky interference (fresh key per request), many requests
  *   should hit all 3 channels roughly evenly; with round-robin every request would
@@ -20,6 +21,7 @@ function ok(cond, msg) { if (cond) pass++; else { fail++; failures.push(msg); co
 
 async function runOne(routeRandom, port) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agw-rand-'));
+  require('./_surface').useDir(dir);
   const cfgPath = path.join(dir, 'config.json');
   const PA = 45500 + Math.floor(Math.random() * 200);
   const PB = PA + 1, PC = PA + 2;
@@ -60,7 +62,7 @@ async function runOne(routeRandom, port) {
   const reqJson = (key) => new Promise((resolve) => {
     const data = JSON.stringify({ model: 'gpt', messages: [{ role: 'user', content: 'hi' }] });
     const req = http.request({
-      host: '127.0.0.1', port, path: '/v1/chat/completions', method: 'POST',
+      host: '127.0.0.1', port, path: surface.spath('/v1/chat/completions'), method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data), Authorization: 'Bearer ' + key },
     }, res => {
       const cs = []; res.on('data', c => cs.push(c));

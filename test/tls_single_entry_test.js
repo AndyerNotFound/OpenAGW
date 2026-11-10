@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 // ================= TLS single-entry policy test =================
 //// Proves: an instance with TLS on never listens on its own port and is reachable only through
 //  the main port's HTTPS + /<name>/; the main port with TLS on serves HTTPS only (no plaintext twin);
@@ -68,7 +69,7 @@ function reqPlain(port, p) {
 
   const tlsPath = await reqTls(MAIN, '/tlsi/v1/models');
   check('TLS 实例经主端口 https 的 /实例名/ 可访问', tlsPath.code === 200, 'HTTP ' + tlsPath.code);
-  const tlsAuth = await reqTls(MAIN, '/tlsi/admin/api/instances');
+  const tlsAuth = await reqTls(MAIN, surface.pair(cfgDir, 'tlsi').admin + '/admin/api/instances');
   check('TLS 实例面板 API 经前缀可达(未带凭据=401)', tlsAuth.code === 401 || tlsAuth.code === 403, 'HTTP ' + tlsAuth.code);
 
   const plainOnMain = await reqPlain(MAIN, '/v1/models');

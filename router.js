@@ -12,6 +12,7 @@ const { logErr, log, toText, utf8 } = require('./util');
 const state = require('./state');
 const admin = require('./admin');
 const modelref = require('./modelref');
+const permissions = require('./permissions');
 
 // ================= Channel routing / auth / errors / model list =================
 /* ================= Channel routing / auth / errors / model list ================= */
@@ -238,12 +239,15 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
   req.on('end', () => { let j; try { j = JSON.parse(body || '{}'); } catch (_) { return sendError('openai', res, 400, 'bad json'); } cb(j); });
   req.on('error', () => {});
 }
-// Instances a key card may reach (empty = all)
+// Instances a key card may reach. An empty whitelist means "the issuing instance only" -- crossing
+// into another instance is always an explicit grant, never an accident. Wildcards are accepted.
 function availableBranches(cfg, userKey) {
   const all = state.CUR_POOL ? [...state.CUR_POOL.instances.keys()].filter(n => { const c = state.CUR_POOL.instances.get(n); return c && !c._disabled; }) : [cfg._name || 'default'];
-if (!userKey) return all; // admin/keyless: everything
-  const b = userKey.branches || [];
-  return b.length ? all.filter(n => b.includes(n)) : all;
+  if (!userKey) return all; // admin/keyless: everything
+  const own = cfg._name || 'default';
+  const wl = permissions.list(userKey.branches);
+  if (!wl.length) return all.includes(own) ? [own] : [];
+  return all.filter(n => permissions.allowsBranch(userKey, n));
 }
 
 /* ---- Key card generation (configurable length 8-128, base64url charset) ---- */
@@ -275,31 +279,77 @@ function keyCreditsJSON(uk) {
   };
 }
 
-// Auth: returns {ok, admin, userKey, status, error}
-//  - admin=true: admin-role key matched (or keyless no-auth mode)
-//  - userKey: matched an apiKeys card (quota/expiry/disabled/model whitelist checked here)
-function checkAuth(cfg, req, query) {
+// Auth: returns {ok, admin, userKey, keyOwner, status, error}
+//  - admin=true: the presented card has role "admin"
+//  - userKey: matched a user card; keyOwner is the instance config that owns it (quota/usage home)
+//  - quota / expiry / disabled are checked here; model / provider / instance whitelists are
+//    enforced on the request path (record.js), where the target channel and model are known
+function keyCardError(uk) {
+  if (uk.enable === false) return { status: 401, error: 'key 已禁用' };
+  if (uk.expiresAt) {
+    const t = new Date(uk.expiresAt).getTime();
+    if (!isNaN(t) && t < Date.now()) return { status: 401, error: 'key 已过期 (' + uk.expiresAt + ')' };
+  }
+  if (uk.quotaTokens > 0 && (uk.usedTokens || 0) >= uk.quotaTokens)
+    return { status: 429, error: '额度已用尽 (' + (uk.usedTokens || 0) + '/' + uk.quotaTokens + ' tokens)' };
+  return null;
+}
+
+/* One card = one user across instances: a card issued on instance A may reach instance B when its
+ * `branches` whitelist allows B. The owner config keeps the usedTokens counter, so the quota and
+ * the rate window are shared no matter which instance served the request. */
+function findCrossInstanceKey(cfg, token) {
+  if (!state.CUR_POOL) return null;
+  const target = cfg._name || 'default';
+  let denied = null;
+  for (const [, c] of state.CUR_POOL.instances) {
+    if (!c || c === cfg) continue;
+    const uk = (c.apiKeys || []).find(k => k && k.key === token);
+    if (!uk) continue;
+    const err = keyCardError(uk);
+    if (err) return { error: err };
+    const wl = permissions.list(uk.branches);
+    if (!wl.length || !permissions.allowsBranch(uk, target)) {
+      denied = { status: 403, error: '此卡密未授权访问实例: ' + target + ' (实例权限: ' + (wl.join(', ') || '仅发卡实例') + ')' };
+      continue;
+    }
+    return { userKey: uk, keyOwner: c };
+  }
+  return denied ? { error: denied } : null;
+}
+
+// opts.anyBranch: /v1/branches is a discovery endpoint -- a card that may not use the instance it
+// asks from must still be able to learn where it is allowed to go.
+function checkAuth(cfg, req, query, opts) {
   const h = req.headers;
   const auth = h.authorization || '';
   const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
   const presented = bearer || h['x-api-key'] || h['x-goog-api-key'] || (query && query.get('key')) || '';
   const keys = cfg.apiKeys || [];
-  if (keys.length && presented) {
+  const own = cfg._name || 'default';
+  const branchError = (uk) => {
+    if (opts && opts.anyBranch) return null;
+    if (permissions.allowsBranch(uk, own)) return null;
+    return { status: 403, error: '此卡密未授权访问实例: ' + own + ' (实例权限: ' + (permissions.list(uk.branches).join(', ') || '仅发卡实例') + ')' };
+  };
+  if (presented) {
     const uk = keys.find(k => k.key && k.key === presented);
     if (uk) {
-      if (uk.enable === false) return { ok: false, status: 401, error: 'key 已禁用' };
-      if (uk.expiresAt) {
-        const t = new Date(uk.expiresAt).getTime();
-        if (!isNaN(t) && t < Date.now()) return { ok: false, status: 401, error: 'key 已过期 (' + uk.expiresAt + ')' };
-      }
-      if (uk.quotaTokens > 0 && (uk.usedTokens || 0) >= uk.quotaTokens)
-        return { ok: false, status: 429, error: '额度已用尽 (' + (uk.usedTokens || 0) + '/' + uk.quotaTokens + ' tokens)' };
-      if (uk.role === 'admin') return { ok: false, status: 403, error: '管理员密钥不能用于 API 访问' };
-      return { ok: true, userKey: uk, admin: false };
+      const err = keyCardError(uk);
+      if (err) return { ok: false, ...err };
+      const brErr = branchError(uk);
+      if (brErr) return { ok: false, ...brErr };
+      return { ok: true, userKey: uk, keyOwner: cfg, admin: uk.role === 'admin' };
+    }
+    const cross = findCrossInstanceKey(cfg, presented);
+    if (cross && cross.error) return { ok: false, ...cross.error };
+    if (cross) {
+      const brErr = branchError(cross.userKey);
+      if (brErr) return { ok: false, ...brErr };
+      return { ok: true, userKey: cross.userKey, keyOwner: cross.keyOwner, admin: cross.userKey.role === 'admin' };
     }
   }
-  // no key cards = keyless (backward compatible)
-  if (!keys.length) return { ok: true, admin: true };
+  // /v1 always requires a card key; an instance with no cards answers 401 until one is issued
   return { ok: false, status: 401, error: 'invalid key' };
 }
 
@@ -380,12 +430,17 @@ function collectModels(cfg) {
   }
   return set;
 }
-function modelsResponse(cfg, format) {
+function modelsResponse(cfg, format, userKey) {
 /* Model references (ported from ai-gateway-core): a model name served by several channels is
  * listed once per source under its composite id "instance:channel:model", so clients can pin
- * an exact source; unconflicted names keep their plain id. Plain names keep working in requests. */
-  const refs = modelref.buildRefs([{ name: cfg._name || 'default', channels: cfg.channels || [] }]);
-  const ms = [...new Set(refs.entries.map(e => e.id))];
+ * an exact source; unconflicted names keep their plain id. Plain names keep working in requests.
+ * A user card only sees what it may call: providers outside its channels whitelist are dropped
+ * first, then models outside its models whitelist. */
+  const channels = permissions.filterChannels(userKey, cfg.channels || []);
+  const refs = modelref.buildRefs([{ name: cfg._name || 'default', channels }]);
+  const ms = [...new Set(refs.entries
+    .filter(e => !userKey || permissions.allowsModel(userKey, e.id, e.plain))
+    .map(e => e.id))];
   if (format === 'gemini') {
     return { models: ms.map(m => ({ name: 'models/' + m, displayName: m, supportedGenerationMethods: ['generateContent', 'streamGenerateContent', 'countTokens'] })) };
   }

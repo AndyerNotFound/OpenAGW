@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 // ================= Hot restart test: in-flight SSE survives a worker swap =================
 //// Proves: (1) a streaming response keeps delivering while the worker is replaced,
 //// (2) new requests right after the swap land on the new worker,
@@ -14,6 +15,7 @@ const UP_PORT = Number(process.env.UP_PORT || 39022);
 const CHUNKS = 40, DELAY = 50;
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agw-hot-'));
 const cfgDir = path.join(dir, 'cfg');
+require('./_surface').useDir(cfgDir);
 fs.mkdirSync(cfgDir, { recursive: true });
 fs.writeFileSync(path.join(cfgDir, 'config.json'), JSON.stringify({
   listen: { host: '127.0.0.1', port: GW_PORT },
@@ -39,7 +41,7 @@ function streamOnce(tag) {
   return new Promise((resolve) => {
     const t0 = Date.now();
     const body = JSON.stringify({ model: 'hot-model', stream: true, messages: [{ role: 'user', content: 'go' }] });
-    const req = http.request({ host: '127.0.0.1', port: GW_PORT, path: '/v1/chat/completions', method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, res => {
+    const req = http.request({ host: '127.0.0.1', port: GW_PORT, path: surface.spath('/v1/chat/completions'), method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, res => {
       let text = '';
       res.on('data', c => { text += c.toString('utf8'); });
       res.on('end', () => {

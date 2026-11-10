@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 /* Migrated ai-gateway-core plugins over real HTTP: balance / probe / legacy-import.
  * Checks the compatibility layer (src/router.js), params.authAdmin(), ctx.upstreamRequest,
  * ctx.gateway.instanceChannels / listInstances, and the admin guard on plugin routes.
@@ -20,7 +21,7 @@ function ok(cond, msg) {
 }
 function request(port, p, headers = {}, method = 'GET', body = null) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, path: p, headers, method }, res => {
+    const req = http.request({ host: '127.0.0.1', port, path: surface.spath(p), headers, method }, res => {
       let out = '';
       res.on('data', c => out += u8p(c));
       res.on('end', () => resolve({ status: res.statusCode, body: out }));
@@ -64,6 +65,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     channels: [{ name: 'mock', type: 'openai', baseUrl: 'http://127.0.0.1:' + mockPort, apiKey: 'sk-up', models: ['m'], default: true, probe: true }],
   }));
   const cfg = G.loadConfig(cfgFile);
+  surface.set(cfg);
   const started = await G.startServer(cfg, { host: '127.0.0.1', port: 0, multi: false });
   const port = started.port;
   const adminToken = panelAuth.read(cfg, 'default').adminToken;

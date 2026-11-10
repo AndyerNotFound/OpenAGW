@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 // ================= TLS fail-closed test =================
 //// Two guarantees:
 ////  1. an instance with TLS on but a broken/missing certificate is NOT exposed in plaintext (no silent downgrade)

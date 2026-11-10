@@ -8,7 +8,7 @@ const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
 const zlib = require('zlib');
-const { poolRoute, BILLING_PATHS, GENERIC_BALANCE_PATHS, createInstancePool, poolLoadAll, setupModelSync, statsFlushFile, setupStatsFlush } = require('./pool');
+const { poolRoute, tlsBlocked, BILLING_PATHS, GENERIC_BALANCE_PATHS, createInstancePool, poolLoadAll, setupModelSync, statsFlushFile, setupStatsFlush } = require('./pool');
 const { sendError, corsHeaders, jsonErr, checkAuth, keyCreditsJSON, genApiKey, persistRuntimeCfg, availableBranches, collectJson, modelsResponse, sendJson, loadKeyUsage, makeGatewayApi } = require('./router');
 const { VERSION, utf8, log, logErr } = require('./util');
 const { balanceAggregate, pickBalanceChannel, fetchBalanceCached, fetchChannelBalance, balanceTarget, setupProbe } = require('./upstream');
@@ -25,6 +25,9 @@ const panelAuth = require('./panel-auth');
 const hot = require('./hot');
 const { completePath } = require('./endpoints');
 const mdns = require('./mdns');
+const permissions = require('./permissions');
+const ratelimit = require('./ratelimit');
+const { surfaceMatch } = require('./surface');
 /* Endpoint completion logs once per bare path, not once per request: a client whose base URL
  * has no /v1 would otherwise add a line to every single call. */
 const EP_LOGGED = new Set();
@@ -40,26 +43,33 @@ async function handleHttp(cfg, req, res) {
   const u = new URL(req.url, 'http://localhost');
   let p = u.pathname;
 
-// ===== Multi-instance routing: compat port → /<inst>/ prefix → default =====
-  if (state.CUR_POOL) {
-    const r = poolRoute(state.CUR_POOL, req, p);
-    if (r.error) { sendError('openai', res, r.status || 404, r.error); return; }
-    cfg = r.cfg;
-    p = r.path;
-    if (r.name) req._branchName = r.name;
-// Branch whitelist: a card with non-empty branches may only reach the instances in that list
-    if (req._branchName) {
-      const h = req.headers;
-      const auth = h.authorization || '';
-      const presented = (auth.startsWith('Bearer ') ? auth.slice(7).trim() : '') || h['x-api-key'] || h['x-goog-api-key'] || u.searchParams.get('key') || '';
-      if (presented) {
-        for (const [, c] of state.CUR_POOL.instances) {
-          const uk = (c.apiKeys || []).find(k => k.key && k.key === presented);
-          if (uk && Array.isArray(uk.branches) && uk.branches.length && !uk.branches.includes(req._branchName)) {
-            return sendError('openai', res, 403, '此卡密不允许访问分组: ' + req._branchName + ' (可用: ' + uk.branches.join(', ') + ')');
-          }
-        }
+// ===== Secret admin surface (2026-11-10) =====
+// The WebUI lives at /<sid>/admin/... (one-time link -> login page -> session cookie). The
+// card-holder API keeps its old bare paths (/v1, /v1beta, /api/app, /plugins and the
+// /<instance>/ prefix in multi-instance mode), so standard SDK base URLs need no changes.
+// A /<sid>/admin shape that no instance owns answers 404: probing /admin or /auth never
+// finds the panel. Instance permissions are enforced centrally afterwards, as before.
+  {
+    const pool = state.CUR_POOL;
+    const insts = pool ? [...pool.instances.values()] : [cfg];
+    const s = surfaceMatch(insts, p);
+    if (s && s.cfg) {
+      cfg = s.cfg;
+      p = s.path;
+      req._branchName = s.name;
+      req._panelSid = s.sid;
+      if (pool) {
+        const blk = tlsBlocked(pool, s.name, req);
+        if (blk) return sendError('openai', res, blk.status || 400, blk.error);
       }
+    } else if (s && s.unknown) {
+      return sendError('openai', res, 404, 'not found: ' + req.method + ' ' + p);
+    } else if (pool) {
+      const r = poolRoute(pool, req, p);
+      if (r.error) { sendError('openai', res, r.status || 404, r.error); return; }
+      cfg = r.cfg;
+      p = r.path;
+      if (r.name) req._branchName = r.name;
     }
   }
 
@@ -79,33 +89,21 @@ async function handleHttp(cfg, req, res) {
     p = completed;
   }
 
-// ===== Public route whitelist (2026-10-27): only /v1 /v1beta /auth /profile /admin pass (panel uses a one-time login link / session cookie) =====
-// Everything else 404s: /health /status* /user /plugins /credits are all closed; re-add when needed
-// (endpoint completion above rewrites a bare /chat/completions into /v1/chat/completions, so it
-//  passes this same whitelist — the closed prefixes are not in its list and still 404)
+// ===== Public route whitelist: the card-holder API plus the secret admin prefix =====
+// /health /status /balance /dashboard… keep 404ing (completion never re-opens them either).
+// /admin is only reachable through /<sid>/admin (req._panelSid); a bare /admin stays 404.
   const allowed = p === '/v1' || p.startsWith('/v1/')
     || p === '/v1beta' || p.startsWith('/v1beta/')
-    || p === '/auth' || p.startsWith('/auth/')
-    || p === '/profile' || p.startsWith('/profile/')
     || p === '/plugins' || p.startsWith('/plugins/')
     || p === '/api/app' || p.startsWith('/api/app/')
-    || p === '/admin' || p.startsWith('/admin/');
+    || (!!req._panelSid && (p === '/admin' || p.startsWith('/admin/')));
   if (!allowed) return sendError('openai', res, 404, 'not found: ' + req.method + ' ' + p);
 
-// ===== Removed user-side endpoints (2026-10): keep them 404 instead of falling through as panel assets =====
-  if (p === '/auth/login' || p === '/auth/register' || p === '/auth/me' || p === '/auth/profile'
-      || p === '/auth/mykeys' || p.startsWith('/auth/mykeys-')) {
-    return sendError('openai', res, 404, 'not found: ' + req.method + ' ' + p);
-  }
-
-// ===== Web admin panel (/admin + /admin/api/*) =====
-// /auth/* is the panel itself: the one-time login link plus the static assets under m3/
-  const isAuthFile = p.startsWith('/auth/');
-  if (p === '/admin' || p === '/admin/' || p.startsWith('/admin/api/')
-      || p === '/auth' || p === '/auth/' || isAuthFile
-      || /^\/auth\/[A-Za-z0-9_-]{16,128}\/[A-Za-z0-9_-]{8,256}\/?$/.test(p)) {
-    // admin pages need no upfront body collection; handleAdmin handles it internally
-// but POST/DELETE bodies must be collected first
+// ===== Web admin panel: /admin... (only after the /<sid>/admin prefix matched) =====
+// Entry is the one-time link /<sid>/admin/<token>; the panel, its static assets and the JSON
+// API all sit behind the session cookie issued by the login page (admin card key + 2FA).
+  if (req._panelSid && (p === '/admin' || p.startsWith('/admin/'))) {
+// POST/DELETE bodies are collected first; handleAdmin answers every /admin/* path itself
     if (req.method === 'POST' || req.method === 'DELETE') {
       let adminBody = '';
 const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
@@ -139,7 +137,7 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
 
 // ===== Accessible branch list (card auth, filtered by branches) =====
   if (p === '/v1/branches' && req.method === 'GET') {
-    const authR = checkAuth(cfg, req, u.searchParams);
+    const authR = checkAuth(cfg, req, u.searchParams, { anyBranch: true });
     if (!authR.ok) return sendError('openai', res, authR.status || 401, authR.error);
     res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders() });
     return res.end(JSON.stringify({ branches: availableBranches(cfg, authR.userKey) }));
@@ -150,7 +148,7 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
     const authR = checkAuth(cfg, req, u.searchParams);
     if (!authR.ok) return sendError(fmt, res, authR.status || 401, authR.error || 'invalid key');
     res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders() });
-    return res.end(JSON.stringify(modelsResponse(cfg, fmt)));
+    return res.end(JSON.stringify(modelsResponse(cfg, fmt, authR.userKey)));
   }
 
 // ===== Upstream balance passthrough (OpenAI semantics, recognizable by third-party clients) =====
@@ -169,7 +167,8 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
       ch = (cfg.channels || []).find(c => c.name === want) || null;
       if (!ch) return sendError('openai', res, 404, '渠道不存在: ' + want);
       const cardWl = uk && Array.isArray(uk.channels) && uk.channels.length ? uk.channels : null;
-      const allowed = !!authR.admin || !cardWl || cardWl.includes(want);
+      const isAdminCard = uk && uk.role === 'admin';
+      const allowed = isAdminCard || !cardWl || cardWl.includes(want);
       if (!allowed) return sendError('openai', res, 403, '此卡密不允许查询渠道余额: ' + want);
     } else if (GENERIC_BALANCE_PATHS.has(p)) {
 // Multi-channel aggregation (generic balance alias): concurrently query every visible channel with a balance target -> convert to base currency and sum
@@ -255,6 +254,15 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
   if (!clientFormat && isPassthru) {
     const authR = checkAuth(cfg, req, u.searchParams);
     if (!authR.ok) return sendError('openai', res, authR.status || 401, authR.error || 'invalid key');
+/* Passthrough endpoints carry arbitrary payloads (files, images, audio), so only RPM applies here;
+ * TPM accounting needs a parsed generation body and stays with the chat/conversion path. */
+    if (authR.userKey) {
+      const rl = ratelimit.admit(authR.userKey, 0);
+      if (!rl.ok) {
+        try { if (rl.retryAfter) res.setHeader('Retry-After', String(rl.retryAfter)); } catch (_) {}
+        return sendError('openai', res, rl.status || 429, rl.error || 'rate limited');
+      }
+    }
     const ct = req.headers['content-type'] || '';
     const chunks = [];
     let size = 0, aborted = false;
@@ -264,7 +272,7 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
       if (size > cfg.maxBodyBytes) { aborted = true; req.destroy(); sendError('openai', res, 413, 'request body too large (>' + cfg.maxBodyBytes + ' bytes)'); return; }
       chunks.push(c);
     });
-    req.on('end', () => { if (!aborted) handleExtraEndpoint(cfg, req, res, p + (u.search || ''), Buffer.concat(chunks), ct, req.method); });
+    req.on('end', () => { if (!aborted) handleExtraEndpoint(cfg, req, res, p + (u.search || ''), Buffer.concat(chunks), ct, req.method, authR.userKey || null); });
     req.on('error', () => {});
     return;
   }
@@ -273,6 +281,7 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
   const authR = checkAuth(cfg, req, u.searchParams);
   if (!authR.ok) return sendError(clientFormat, res, authR.status || 401, authR.error || 'invalid key');
   urlInfo.userKey = authR.userKey || null;
+  urlInfo.keyOwner = authR.keyOwner || cfg;
 
   let bodyStr = '';
   let size = 0;
@@ -309,8 +318,7 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
             }
             let hit = null;
             if (tgt && !tgt._disabled) {
-              const branchesOk = !authR.userKey || !Array.isArray(authR.userKey.branches) || !authR.userKey.branches.length
-                || authR.userKey.branches.includes(tgt._name);
+              const branchesOk = !authR.userKey || permissions.allowsBranch(authR.userKey, tgt._name);
               if (branchesOk) {
                 for (const ch of (tgt.channels || [])) {
                   if (!ch || !ch.name || !modelref.channelMatch(ref.channel, ch.name)) continue;
@@ -372,7 +380,7 @@ function startServer(cfg, opts = {}) {
     admin.setBalanceFn((c, ch, cb) => fetchChannelBalance(c, ch, cb), { cached: fetchBalanceCached, target: balanceTarget });
     poolLoadAll(pool, cfg);
     log(`OpenAGW v${VERSION} 就绪 (多实例单进程模式):`);
-    log(`  主端口 ${pool.mainHost}:${pool.mainPort}${pool.mainTlsPort ? ' (https:' + pool.mainTlsPort + ')' : ''}  →  /实例名/v1/... 访问对应实例, 无前缀 = default`);
+    log(`  主端口 ${pool.mainHost}:${pool.mainPort}${pool.mainTlsPort ? ' (https:' + pool.mainTlsPort + ')' : ''}  →  /实例名/v1/... 访问对应实例, 无前缀 = default; 面板 /<sid>/admin/...`);
     for (const [name, c] of pool.instances) {
       const ports = [];
       for (const srv of pool.servers.values()) if (srv.name === name) ports.push((srv.tls ? 'https:' : '') + srv.port);
@@ -402,6 +410,7 @@ try { // cold-start restore
       cfg._stats.requests = j.requests || 0; cfg._stats.errors = j.errors || 0; cfg._stats.retries = j.retries || 0;
       cfg._stats.byChannel = j.byChannel || {}; cfg._stats.byKey = j.byKey || {};
       cfg._stats.byModel = j.byModel || {}; cfg._stats.daily = j.daily || {};
+      cfg._stats.hourly = j.hourly || {}; cfg._stats.minutely = j.minutely || {};
       cfg._stats.startedAt = j.since || cfg._stats.startedAt;
     }
   } catch (_) {}

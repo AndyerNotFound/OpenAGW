@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 /* Model reference distribution test (OpenAGW distribution merge, ported from ai-gateway-core)
  * Coverage: (1) modelref parsing / tolerant channel matching / buildRefs conflict ids
  *           (2) /v1/models exposes composite ids only for name-conflicted models
@@ -13,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const ROOT = path.join(__dirname, '..');
+surface.useDir(path.join(ROOT, 'data'));
 const modelref = require(path.join(ROOT, 'modelref.js'));
 const { modelsResponse } = require(path.join(ROOT, 'router.js'));
 
@@ -104,7 +106,7 @@ const waitPort = (port, tries = 80) => new Promise((res, rej) => {
   try {
     await waitPort(GW);
     /* (2) /v1/models */
-    const ml = await reqJson(GW, 'GET', '/v1/models', null, AUTH);
+    const ml = await reqJson(GW, 'GET', surface.spath('/v1/models'), null, AUTH);
     const ids = JSON.parse(ml.body).data.map(m => m.id);
     ok(ids.includes('default:chanA:shared-model') && ids.includes('default:chanB:shared-model'), 'models list has both composite ids: ' + ids.join(','));
     ok(!ids.includes('shared-model'), 'conflicted plain name not listed');
@@ -113,7 +115,7 @@ const waitPort = (port, tries = 80) => new Promise((res, rej) => {
     /* (3) plain name sticks to the winning channel (prompt-cache affinity) */
     let firstChan = null;
     for (let i = 0; i < 3; i++) {
-      const r = await reqJson(GW, 'POST', '/v1/chat/completions', { model: 'shared-model', messages: [{ role: 'user', content: 'hi' }] }, AUTH);
+      const r = await reqJson(GW, 'POST', surface.spath('/v1/chat/completions'), { model: 'shared-model', messages: [{ role: 'user', content: 'hi' }] }, AUTH);
       const cBody = JSON.parse(r.body).choices[0].message.content;
       if (!firstChan) firstChan = cBody;
       else eq(cBody, firstChan, 'sticky: same key+model sticks to channel (try ' + (i + 1) + ', got ' + cBody + ')');
@@ -121,13 +123,13 @@ const waitPort = (port, tries = 80) => new Promise((res, rej) => {
 
     /* (4) composite reference pins chanB; upstream receives the real name */
     for (let i = 0; i < 3; i++) {
-      const r = await reqJson(GW, 'POST', '/v1/chat/completions', { model: 'default:chanB:shared-model', messages: [{ role: 'user', content: 'hi' }] }, AUTH);
+      const r = await reqJson(GW, 'POST', surface.spath('/v1/chat/completions'), { model: 'default:chanB:shared-model', messages: [{ role: 'user', content: 'hi' }] }, AUTH);
       eq(r.headers['x-ai-gateway-channel'], 'chanB', 'ref pins chanB (try ' + (i + 1) + ')');
       eq(JSON.parse(r.body).choices[0].message.content, 'from-B model=shared-model', 'upstream got real model name');
     }
 
     /* (5) tolerant matching */
-    const rt = await reqJson(GW, 'POST', '/v1/chat/completions', { model: 'Default:CHANB:shared-model', messages: [{ role: 'user', content: 'hi' }] }, AUTH);
+    const rt = await reqJson(GW, 'POST', surface.spath('/v1/chat/completions'), { model: 'Default:CHANB:shared-model', messages: [{ role: 'user', content: 'hi' }] }, AUTH);
     eq(rt.headers['x-ai-gateway-channel'], 'chanB', 'case-tolerant ref resolves to chanB');
   } finally {
     gw.kill('SIGKILL'); ma.close(); mb.close();

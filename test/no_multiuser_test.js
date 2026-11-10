@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 // Multi-user removal: credential login/registration and the user admin API must be gone,
 // legacy config fields must not survive a load, and key cards must keep working.
 const fs = require('fs');
@@ -17,7 +18,7 @@ function ok(cond, msg) {
 
 function request(port, p, headers = {}, method = 'GET', body = null) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, path: p, headers, method }, res => {
+    const req = http.request({ host: '127.0.0.1', port, path: surface.spath(p), headers, method }, res => {
       let out = '';
       res.on('data', c => out += u8p(c));
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: out }));
@@ -44,6 +45,7 @@ function request(port, p, headers = {}, method = 'GET', body = null) {
   }));
 
   const cfg = G.loadConfig(cfgFile);
+  surface.set(cfg);
   ok(!('users' in cfg), '加载后不再保留 users 表');
   ok(!('registration' in cfg), '加载后不再保留 registration 设置');
 

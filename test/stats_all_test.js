@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 // /admin/api/stats-all: one call for the app's statistics tab.
 const fs = require('fs');
 const os = require('os');
@@ -12,7 +13,7 @@ let pass = 0, fail = 0;
 function ok(c, m) { if (c) pass++; else { fail++; console.error('  ✗ ' + m); } }
 function request(port, p, headers = {}) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, path: p, headers }, res => {
+    const req = http.request({ host: '127.0.0.1', port, path: surface.spath(p), headers }, res => {
       let out = ''; res.on('data', c => out += u8p(c));
       res.on('end', () => resolve({ status: res.statusCode, body: out }));
     });
@@ -28,9 +29,10 @@ function request(port, p, headers = {}) {
     webToken: 'stats-token',
     panel: { openBrowser: false }, modelSync: { enable: false }, probe: { enable: false },
     channels: [{ name: 'dummy', type: 'openai', baseUrl: 'http://127.0.0.1:9', apiKey: 'sk-test', models: ['m'], default: true }],
-    apiKeys: [],
+    apiKeys: [{ key: 'sk-test', name: 'test' }],
   }));
   const cfg = G.loadConfig(cfgFile);
+  surface.set(cfg);
   const started = await G.startServer(cfg, { host: '127.0.0.1', port: 0, multi: false });
   cfg._stats.requests = 7; cfg._stats.errors = 1;
   cfg._stats.byChannel = { dummy: { requests: 7, errors: 1, inputTokens: 1200, outputTokens: 800 } };

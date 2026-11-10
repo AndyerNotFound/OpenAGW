@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 /* Log reading must not scale with the log file (2026-11-09).
  *
  * Before: /admin/api/logs did fs.readFileSync(whole file) + split('\n'). gateway.log is append-only
@@ -22,7 +23,7 @@ function ok(c, m) { if (c) pass++; else { fail++; console.error('  x ' + m); } }
 
 function request(port, p, headers) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, path: p, headers: headers || {} }, res => {
+    const req = http.request({ host: '127.0.0.1', port, path: surface.spath(p), headers: headers || {} }, res => {
       const chunks = [];
       res.on('data', c => chunks.push(c));
       res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8'), headers: res.headers }));
@@ -110,9 +111,10 @@ async function rotateGuardCase() {
     webToken: 'log-token',
     panel: { openBrowser: false }, modelSync: { enable: false }, probe: { enable: false },
     channels: [],
-    apiKeys: [],
+    apiKeys: [{ key: 'sk-test', name: 'test' }],
   }));
   const cfg = G.loadConfig(cfgFile);
+  surface.set(cfg);
   const started = await G.startServer(cfg, { host: '127.0.0.1', port: 0, multi: false });
 
   const logDir = path.join(dir, 'log');

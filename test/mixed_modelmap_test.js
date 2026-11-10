@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 /* modelMap + models 混合配置路由测试 (2026-11-03)
  * 修复前：chanA 用 modelMap 改名命中后，chanB 的 models 列表会被短路遮蔽，永远轮不到。
  * 修复后：两个渠道都进候选。
@@ -22,6 +23,7 @@ function ok(cond, msg) { if (cond) pass++; else { fail++; failures.push(msg); co
 
 (async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agw-mixmap-'));
+  require('./_surface').useDir(dir);
   const PA = 45700 + Math.floor(Math.random() * 200), PB = PA + 1, GW = PA + 2;
 
   const gotA = [], gotB = [];
@@ -68,7 +70,7 @@ function ok(cond, msg) { if (cond) pass++; else { fail++; failures.push(msg); co
   const reqJson = (key) => new Promise((resolve) => {
     const data = JSON.stringify({ model: 'gpt', messages: [{ role: 'user', content: 'hi' }] });
     const req = http.request({
-      host: '127.0.0.1', port: GW, path: '/v1/chat/completions', method: 'POST',
+      host: '127.0.0.1', port: GW, path: surface.spath('/v1/chat/completions'), method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data), Authorization: 'Bearer ' + key },
     }, res => {
       const cs = []; res.on('data', c => cs.push(c));

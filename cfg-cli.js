@@ -383,7 +383,7 @@ function main() {
     if (!cfg) { console.log(`✗ Instance [${name}] config not found`); process.exit(1); }
     cfg.webToken = rest[0] || '';
     saveCfg(name, cfg);
-    if (rest[0]) { console.log(`✓ Web token set, panel: http://127.0.0.1:${(cfg.listen||{}).port}/auth?key=${rest[0]}`); console.log(`  Restart: agw.sh restart ${name}`); }
+    if (rest[0]) { console.log('✓ Web token set (脚本/API 用; 面板入口请用: agw web login)'); console.log(`  Restart: agw.sh restart ${name}`); }
     else { console.log(`✓ Web token cleared, restart: agw.sh restart ${name}`); }
   } else if (cmd === 'enable-tls') {
     let cfg = loadCfg(name);

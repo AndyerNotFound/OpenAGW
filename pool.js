@@ -203,6 +203,7 @@ function flushStats(cfg) {
       savedAt: new Date().toISOString(),
       since: st.startedAt, requests: st.requests || 0, errors: st.errors || 0, retries: st.retries || 0,
       byChannel: st.byChannel || {}, byKey: st.byKey || {}, byModel: st.byModel || {}, daily: st.daily || {},
+      hourly: st.hourly || {}, minutely: st.minutely || {},
     };
     const tmp = statsFlushFile(cfg) + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(snap, null, 1));
@@ -230,13 +231,12 @@ function poolLoadInstance(pool, name) {
   const cfg = loadConfig(f);
   cfg._name = name;
   cfg._disabled = !!cfg.disabled;
-// An instance named after an endpoint head (chat / models / images …) shadows the bare path of
-// that endpoint: /chat/completions then means "instance chat + /completions". A name the router
-// reserves (credits / auth / user …) is worse: /<name>/... never reaches the instance at all, it is
-// only reachable on its own compat port. The panel refuses both for new names; an instance that
-// already carries one keeps working, with one warning per load so the cause is visible in the log.
-  if (isEndpointHead(name)) logErr('[pool] 实例名 ' + name + ' 与 API 端点首段同名: 裸 /' + name + '/... 会优先当作实例前缀 (建议改名)');
-  else if (RESERVED_PATHS.has(name)) logErr('[pool] 实例名 ' + name + ' 是网关保留路径: 主端口的 /' + name + '/... 到不了该实例, 只能用它自己的端口 (建议改名)');
+// Instance names no longer appear in main-port URLs (the secret user pair / panel sid selects the
+// instance), so the old shadowing problem is gone. The reserved-word / endpoint-head checks stay:
+// they keep names readable and avoid confusing an instance with a gateway route in the CLI and on
+// compat ports, and the panel refuses both for new names.
+  if (isEndpointHead(name)) logErr('[pool] 实例名 ' + name + ' 与 API 端点首段同名 (建议改名, 避免与端点混淆)');
+  else if (RESERVED_PATHS.has(name)) logErr('[pool] 实例名 ' + name + ' 是网关保留路径 (建议改名, 避免与网关路由混淆)');
   try {
     if (!old) panelAuth.ensure(cfg, name);
     else {
@@ -262,6 +262,7 @@ if (!old) { // cold start: restore history from data/stats-<inst>.json (fallback
         cfg._stats.requests = j.requests || 0; cfg._stats.errors = j.errors || 0; cfg._stats.retries = j.retries || 0;
         cfg._stats.byChannel = j.byChannel || {}; cfg._stats.byKey = j.byKey || {};
         cfg._stats.byModel = j.byModel || {}; cfg._stats.daily = j.daily || {};
+        cfg._stats.hourly = j.hourly || {}; cfg._stats.minutely = j.minutely || {};
         cfg._stats.startedAt = j.since || cfg._stats.startedAt;
         log('[stats] ' + name + ' 已从磁盘恢复统计: ' + (j.requests || 0) + ' 请求');
       }
@@ -310,6 +311,12 @@ function poolRenameInstance(pool, oldName, newName) {
   pool.instances.delete(oldName);
   cfg._name = newName;
   cfg._configFile = path.join(pool.dir, 'config.' + newName + '.json');
+// carry the panel state (sid + stable card-holder pair) over to the new file name
+  try {
+    const oldState = panelAuth.stateFile({ _configFile: path.join(pool.dir, 'config.json') }, oldName);
+    const newState = panelAuth.stateFile({ _configFile: path.join(pool.dir, 'config.json') }, newName);
+    if (fs.existsSync(oldState) && !fs.existsSync(newState)) fs.renameSync(oldState, newState);
+  } catch (_) {}
   try { panelAuth.ensure(cfg, newName); } catch (e) { logErr('[panel] 重命名后初始化登录状态失败: ' + e.message); }
   pool.instances.set(newName, cfg);
   poolReconcilePorts(pool);

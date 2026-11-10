@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 /* Channel balance passthrough test
  * Coverage: (1) target resolution (channel overrides / built-in presets)  (2) the runtime whitelist no longer drops balance* fields (otherwise persistRuntimeCfg would wipe them from the config)
  *       (3) fetchChannelBalance (relative URL joining / no preset / bad path / channel proxy)
@@ -23,7 +24,7 @@ function eq(a, b, msg) { ok(a === b, msg + ` (got=${JSON.stringify(a)}, want=${J
 
 function get(port, p, headers = {}) {
   return new Promise((resolve, reject) => {
-    const req = http.request({ host: '127.0.0.1', port, path: p, method: 'GET', headers }, res => {
+    const req = http.request({ host: '127.0.0.1', port, path: surface.spath(p), method: 'GET', headers }, res => {
       let raw = '';
       res.on('data', c => raw += u8(c));
       res.on('end', () => { let j = null; try { j = JSON.parse(raw); } catch (_) {} resolve({ status: res.statusCode, raw, json: j }); });
@@ -139,6 +140,7 @@ function readCfg(file) {
   console.log('── Part 4: /v1/dashboard/billing/* ──');
   const cfgE2E = readCfg(tmpCfg);
   cfgE2E._configFile = tmpCfg;
+  surface.set(cfgE2E);
   const gw = await G.startServer(cfgE2E, { port: 0 });
   const port = gw.port;
   const H = { Authorization: 'Bearer sk-card-all' };

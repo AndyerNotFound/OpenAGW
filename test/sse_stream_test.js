@@ -1,4 +1,5 @@
 'use strict';
+const surface = require('./_surface');
 /* SSE chunking / forwarding / pass-through regression.
  * Pathological upstreams: one byte per TCP write, CRLF / bare CR line endings,
  * a final event without a trailing newline, `data:` without a space, heartbeats,
@@ -122,7 +123,7 @@ function rawUpstream(scripts) {
 function requestStream(port, route, body) {
   return new Promise((resolve, reject) => {
     const req = http.request({
-      host: '127.0.0.1', port, path: '/v1/chat/completions?' + route, method: 'POST',
+      host: '127.0.0.1', port, path: surface.spath('/v1/chat/completions?' + route), method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer x' },
     }, res => {
       const chunks = [];
@@ -184,6 +185,7 @@ function requestStream(port, route, body) {
     channels: [{ name: 'up', type: 'openai', baseUrl: 'http://127.0.0.1:' + up.port, apiKey: 'x', models: ['m'], default: true }],
   }));
   const cfg = G.loadConfig(cfgFile);
+  surface.set(cfg);
   const started = await G.startServer(cfg, { host: '127.0.0.1', port: 0, multi: false });
   const port = started.port;
   const base = { model: 'm', stream: true, messages: [{ role: 'user', content: 'hi' }] };

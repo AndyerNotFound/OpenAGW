@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<meta name="theme-color" content="#141218">
+<meta name="referrer" content="no-referrer">
+<title>OpenAGW · 管理端登录</title>
+<style>
+:root{
+  --bg:#141218; --surface:#1d1b20; --surface-2:#211f26; --line:#49454f;
+  --on:#e6e1e5; --muted:#a8a2ad; --primary:#d0bcff; --on-primary:#381e72; --err:#f2b8b5;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--bg); color:var(--on);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans SC",sans-serif;
+  display:flex; align-items:center; justify-content:center; padding:24px;
+}
+.card{
+  width:100%; max-width:400px; background:var(--surface);
+  border:1px solid rgba(255,255,255,.06); border-radius:28px;
+  padding:28px 24px 24px; box-shadow:0 12px 40px rgba(0,0,0,.45);
+}
+.brand{display:flex; align-items:center; gap:12px; margin-bottom:20px}
+.logo{
+  width:40px; height:40px; border-radius:12px; flex:none;
+  background:linear-gradient(135deg,#d0bcff,#8e7cc3); color:#141218;
+  display:flex; align-items:center; justify-content:center; font-weight:700; font-size:18px;
+}
+h1{font-size:18px; margin:0; font-weight:600; letter-spacing:.2px}
+.sub{font-size:12px; color:var(--muted); margin-top:4px; line-height:1.6}
+form{display:flex; flex-direction:column; gap:16px; margin-top:20px}
+label{display:flex; flex-direction:column; gap:6px; font-size:12px; color:var(--muted)}
+input{
+  appearance:none; width:100%; padding:13px 14px; font-size:15px; color:var(--on);
+  background:var(--surface-2); border:1px solid var(--line); border-radius:12px; outline:none;
+}
+input:focus{border-color:var(--primary); box-shadow:0 0 0 2px rgba(208,188,255,.18)}
+input::placeholder{color:#6f6a75}
+button{
+  appearance:none; margin-top:4px; padding:14px; border:0; border-radius:100px;
+  background:var(--primary); color:var(--on-primary); font-size:15px; font-weight:600;
+  cursor:pointer; transition:filter .15s, opacity .15s;
+}
+button:hover{filter:brightness(1.06)}
+button:disabled{opacity:.6; cursor:default}
+.err{display:none; font-size:12px; color:var(--err); line-height:1.6; padding:10px 12px;
+  background:rgba(242,184,181,.08); border:1px solid rgba(242,184,181,.25); border-radius:10px}
+.err.show{display:block}
+.foot{margin-top:18px; font-size:11px; color:#6f6a75; line-height:1.7}
+.hint{font-size:11px; color:#6f6a75}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<main class="card">
+  <div class="brand">
+    <div class="logo" aria-hidden="true">A</div>
+    <div>
+      <h1>OpenAGW 管理端</h1>
+      <div class="sub">管理员卡密登录<span id="secondHint"></span></div>
+    </div>
+  </div>
+  <div class="err" id="err" role="alert"></div>
+  <form id="f" autocomplete="off">
+    <label id="wrapKey">管理员卡密
+      <input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="管理端密钥(role=admin)">
+    </label>
+    <label id="wrapSecond" class="hidden">第二密码
+      <input id="second" type="password" autocomplete="off" spellcheck="false" placeholder="未启用可留空">
+    </label>
+    <label id="wrapTotp" class="hidden">TOTP 动态码
+      <input id="totp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" spellcheck="false" placeholder="6 位数字">
+    </label>
+    <div class="hint" id="hint"></div>
+    <button id="go" type="submit">登录</button>
+  </form>
+  <div class="foot">登录链接一次性有效；会话保持 7 天。链接失效时在服务器重新执行 <b>agw web login</b>。</div>
+</main>
+<script>
+(function(){
+  'use strict';
+  var $ = function(id){ return document.getElementById(id); };
+  var errEl = $('err');
+  var wrongTries = 0;
+  function fail(msg){ errEl.textContent = msg; errEl.classList.add('show'); }
+  function fmtLeft(sec){ sec = Math.max(0, Math.floor(sec)); var m = Math.floor(sec/60); return m ? (m+' 分钟') : (sec+' 秒'); }
+  function load(){
+    fetch('login-info', { credentials:'same-origin', cache:'no-store' })
+      .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ return { ok:r.ok, j:j||{} }; }); })
+      .then(function(x){
+        if(!x.ok){ fail(x.j.error || '登录链接已失效，请在服务器重新执行 agw web login'); $('go').disabled = true; return; }
+        var d = x.j;
+        if(d.login){ location.replace('./'); return; }
+        if(!d.keyRequired) $('wrapKey').classList.add('hidden');
+        if(!d.secondKey) $('wrapSecond').classList.add('hidden');
+        if(!d.totp) $('wrapTotp').classList.add('hidden');
+        var bits = [];
+        if(d.secondKey) bits.push('第二密码');
+        if(d.totp) bits.push('TOTP 动态码');
+        $('secondHint').textContent = bits.length ? (' · 需' + bits.join(' 或 ')) : '';
+        $('hint').textContent = (d.secondKey && d.totp) ? '第二密码与 TOTP 动态码填其一即可' : '';
+        var first = d.keyRequired ? $('key') : (d.secondKey ? $('second') : $('totp'));
+        setTimeout(function(){ try{ first.focus(); }catch(e){} }, 60);
+      })
+      .catch(function(){ fail('无法连接网关'); });
+  }
+  $('f').addEventListener('submit', function(ev){
+    ev.preventDefault();
+    errEl.classList.remove('show');
+    var body = {
+      key: $('key').value.trim(),
+      secondKey: $('second').value,
+      totp: $('totp').value.trim()
+    };
+    if(!$('wrapKey').classList.contains('hidden') && !body.key){ fail('请输入管理员卡密'); $('key').focus(); return; }
+    $('go').disabled = true;
+    fetch('login', {
+      method:'POST', credentials:'same-origin', cache:'no-store',
+      headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify(body)
+    }).then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ return { ok:r.ok, j:j||{} }; }); })
+      .then(function(x){
+        if(x.ok){ location.replace(x.j.redirect || './'); return; }
+        wrongTries++;
+        fail(x.j.error || '登录失败');
+        $('go').disabled = false;
+        if(wrongTries >= 4) fail((x.j.error || '登录失败') + '（再失败将作废本次登录链接）');
+      })
+      .catch(function(){ fail('无法连接网关'); $('go').disabled = false; });
+  });
+  load();
+})();
+</script>
+</body>
+</html>
