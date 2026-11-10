@@ -67,10 +67,10 @@ button:disabled{opacity:.6; cursor:default}
   <div class="err" id="err" role="alert"></div>
   <form id="f" autocomplete="off">
     <label id="wrapKey">管理员卡密
-      <input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="管理端密钥(role=admin)">
+      <input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="管理端密钥（role=admin）">
     </label>
     <label id="wrapSecond" class="hidden">第二密码
-      <input id="second" type="password" autocomplete="off" spellcheck="false" placeholder="未启用可留空">
+      <input id="second" type="password" autocomplete="off" spellcheck="false" placeholder="未启用时可留空">
     </label>
     <label id="wrapTotp" class="hidden">TOTP 动态码
       <input id="totp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" spellcheck="false" placeholder="6 位数字">
@@ -78,7 +78,7 @@ button:disabled{opacity:.6; cursor:default}
     <div class="hint" id="hint"></div>
     <button id="go" type="submit">登录</button>
   </form>
-  <div class="foot">登录链接一次性有效；会话保持 7 天。链接失效时在服务器重新执行 <b>agw web login</b>。</div>
+  <div class="foot">登录链接仅可使用一次；会话有效期 7 天。链接失效时在服务器重新执行 <b>agw web login</b>。</div>
 </main>
 <script>
 (function(){
@@ -102,11 +102,11 @@ button:disabled{opacity:.6; cursor:default}
         if(d.secondKey) bits.push('第二密码');
         if(d.totp) bits.push('TOTP 动态码');
         $('secondHint').textContent = bits.length ? (' · 需' + bits.join(' 或 ')) : '';
-        $('hint').textContent = (d.secondKey && d.totp) ? '第二密码与 TOTP 动态码填其一即可' : '';
+        $('hint').textContent = (d.secondKey && d.totp) ? '第二密码与 TOTP 动态码任填其一即可' : '';
         var first = d.keyRequired ? $('key') : (d.secondKey ? $('second') : $('totp'));
         setTimeout(function(){ try{ first.focus(); }catch(e){} }, 60);
       })
-      .catch(function(){ fail('无法连接网关'); });
+      .catch(function(){ fail('无法连接网关，请稍后重试'); });
   }
   $('f').addEventListener('submit', function(ev){
     ev.preventDefault();
@@ -128,9 +128,9 @@ button:disabled{opacity:.6; cursor:default}
         wrongTries++;
         fail(x.j.error || '登录失败');
         $('go').disabled = false;
-        if(wrongTries >= 4) fail((x.j.error || '登录失败') + '（再失败将作废本次登录链接）');
+        if(wrongTries >= 4) fail((x.j.error || '登录失败') + '（再次失败将导致本次登录链接失效）');
       })
-      .catch(function(){ fail('无法连接网关'); $('go').disabled = false; });
+      .catch(function(){ fail('无法连接网关，请稍后重试'); $('go').disabled = false; });
   });
   load();
 })();

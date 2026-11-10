@@ -1,7 +1,7 @@
 // ============ Material Web component library (local vendor, zero external deps) ============
 // Note: this bundle fully inlines lit with no bare module references, so browsers can load it directly.
 const MW_OK = await import('./vendor/mw-v2.js').then(()=>true).catch(e=>{
-  console.error('[MW] 组件库加载失败:', e); return false;
+  console.error('[MW] 组件库加载失败：', e); return false;
 });
 
 // ============ Feature detection: Form Association / dialog are hard dependencies of Material Web form components ============
@@ -77,7 +77,7 @@ class BaseAdapter{
     let res;
     try{ res = await fetch(url, {...opts, signal}); }
     catch(e){ if(e.name==='AbortError') throw e;
-      throw new Error('无法连接到 ' + url.split('/admin/api/')[0] + ' (实例可能未运行或正在重启中)'); }
+      throw new Error('无法连接到 ' + url.split('/admin/api/')[0] + ' （实例可能未运行或正在重启中）'); }
 if(res.status===401){ // session gone (or a wrong token): the login page is the only re-entry
   if(!localStorage.getItem('agw-admin-key') && !window.__agwAuthRedirect){
     window.__agwAuthRedirect=true;
@@ -110,7 +110,7 @@ class HttpAdapter extends BaseAdapter{
   async getConfig(name,signal){ return this._fetch(`${this.base}/admin/api/config/${encodeURIComponent(name)}?reveal=1`,{headers:this._hdr()},signal); }
   async saveConfig(name,patch,signal){
     const r=await this._fetch(`${this.base}/admin/api/config/${encodeURIComponent(name)}`,{method:'POST',headers:this._hdr(),body:JSON.stringify(patch)},signal);
-    if(r&&r.restarting){ snack('已保存, 实例 '+name+' 重启中…'); await this._waitUp(name); snack('实例 '+name+' 已重启'); }
+    if(r&&r.restarting){ snack('已保存，实例 '+name+' 重启中…'); await this._waitUp(name); snack('实例 '+name+' 已重启'); }
     return r;
   }
   // wait for the instance to finish restarting (poll the instance list until running)
@@ -126,9 +126,9 @@ await new Promise(r=>setTimeout(r,3500)); // let the old process exit and the ne
   async getRecordBody(name,id,signal){ return this._fetch(`${this.base}/admin/api/record-body/${encodeURIComponent(name)}?id=${encodeURIComponent(id)}`,{headers:this._hdr()},signal); }
   async createInstance(name,body,signal){ return this._fetch(`${this.base}/admin/api/instance-create/${encodeURIComponent(name)}`,{method:'POST',headers:this._hdr(),body:JSON.stringify(body)},signal); }
   async saveChannel(inst,ch,signal){ const r=await this._fetch(`${this.base}/admin/api/channel/${encodeURIComponent(inst)}`,{method:'POST',headers:this._hdr(),body:JSON.stringify(ch)},signal);
-    if(r&&r.restarting){ snack('已保存, 实例 '+inst+' 重启中…'); await this._waitUp(inst); snack('实例 '+inst+' 已重启'); } return r; }
+    if(r&&r.restarting){ snack('已保存，实例 '+inst+' 重启中…'); await this._waitUp(inst); snack('实例 '+inst+' 已重启'); } return r; }
   async deleteChannel(inst,chName,signal){ const r=await this._fetch(`${this.base}/admin/api/channel/${encodeURIComponent(inst)}/${encodeURIComponent(chName)}`,{method:'DELETE',headers:this._hdr()},signal);
-    if(r&&r.restarting){ snack('已删除, 实例 '+inst+' 重启中…'); await this._waitUp(inst); snack('实例 '+inst+' 已重启'); } return r; }
+    if(r&&r.restarting){ snack('已删除，实例 '+inst+' 重启中…'); await this._waitUp(inst); snack('实例 '+inst+' 已重启'); } return r; }
   async deleteInstance(name,signal){ return this._fetch(`${this.base}/admin/api/instance/${encodeURIComponent(name)}`,{method:'DELETE',headers:this._hdr()},signal); }
   async renameInstance(name,newName,signal){ return this._fetch(`${this.base}/admin/api/instance-rename/${encodeURIComponent(name)}`,{method:'POST',headers:this._hdr(),body:JSON.stringify({newName})},signal); }
   async fetchModels(inst,body,signal){ return this._fetch(`${this.base}/admin/api/channel-models/${encodeURIComponent(inst)}`,{method:'POST',headers:this._hdr(),body:JSON.stringify(body)},signal); }
@@ -354,10 +354,10 @@ function rpRenderChips(dir){
   const box=$('#rp-'+dir+'-chips'); if(!box) return;
   const list=rpLists[dir];
   box.innerHTML=list.length?list.map((r,i)=>
-    '<span class="mm-chip" data-i="'+i+'"><span class="nm">'+esc(r.re)+'</span><span class="arrow">→</span><span class="nm">'+esc(r.to||'(删除匹配)')+'</span>'
+    '<span class="mm-chip" data-i="'+i+'"><span class="nm">'+esc(r.re)+'</span><span class="arrow">→</span><span class="nm">'+esc(r.to||'（删除匹配）')+'</span>'
     +(r.ci?'<span class="tag default" style="margin-left:2px">Aa</span>':'')
     +'<button class="mm-x" data-i="'+i+'" aria-label="删除">✕</button></span>').join('')
-    :'<span style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">暂无规则 — 填上方两框后点 + 添加 (点 ✕ 删除)</span>';
+    :'<span style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">暂无规则 — 请填写上方两栏后点击 + 添加（点击 ✕ 删除）</span>';
 }
 async function rpSave(){
   try{
@@ -368,9 +368,9 @@ async function rpSave(){
 function rpAdd(dir){
   const f=$('#rp-'+dir+'-find'), t=$('#rp-'+dir+'-to'), ci=$('#rp-'+dir+'-ci');
   const re=(f.value||'').trim(), to=(t.value==null?'':t.value);
-  if(!re){ snack('先填查找(正则)',true); return; }
-  try{ new RegExp(re, ci&&ci.selected?'i':''); }catch(e){ snack('正则无效: '+e.message,true); return; }
-  if(rpLists[dir].some(x=>x.re===re&&x.to===to&&!!x.ci===!!(ci&&ci.selected))){ snack('规则已存在',true); return; }
+  if(!re){ snack('请先填写查找正则',true); return; }
+  try{ new RegExp(re, ci&&ci.selected?'i':''); }catch(e){ snack('正则表达式无效： '+e.message,true); return; }
+  if(rpLists[dir].some(x=>x.re===re&&x.to===to&&!!x.ci===!!(ci&&ci.selected))){ snack('该规则已存在',true); return; }
   rpLists[dir].push({re,to,ci:!!(ci&&ci.selected)});
   f.value=''; if(t) t.value='';
   rpRenderChips(dir); rpSave(dir);
@@ -564,10 +564,10 @@ async function renderOverview(){
             <div class="model-page-head"><span class="nm">${esc(p.ch)}</span><span class="cnt">${p.pi}/${p.pt} 页 · 共 ${p.total} 个模型</span></div>
             <div class="model-grid">${p.models.map(m=>`<span class="model-chip" title="${escAttr(m)}">${esc(m)}</span>`).join('')}</div>
           </div>`).join('')
-          :'<div class="empty">当前实例的渠道还没有配置模型</div>';
+          :'<div class="empty">当前实例的渠道尚未配置模型</div>';
         ml.scrollLeft=Math.min(mLeft, ml.scrollWidth-ml.clientWidth);
       }
-    }catch(e){ if(e.name!=='AbortError' && !$('#ov-model-list .model-page')) $('#ov-model-list').innerHTML='<div class="empty">模型列表读取失败: '+esc(e.message)+'</div>'; }
+    }catch(e){ if(e.name!=='AbortError' && !$('#ov-model-list .model-page')) $('#ov-model-list').innerHTML='<div class="empty">模型列表读取失败： '+esc(e.message)+'</div>'; }
 // Announcement carousel: latest 5, one page each, non-fatal on failure
     try{
       const d=await adapter.getAnnouncements(signal);
@@ -603,20 +603,20 @@ function openAnnounceView(a){
   if(!a) return;
   openDialog(a.title||'公告', `<div class="an-detail">
     <div class="an-detail-meta">${fmtDateTime(a.at)}</div>
-    <div class="an-detail-body">${esc(a.body||'(无内容)')}</div>
+    <div class="an-detail-body">${esc(a.body||'（无内容）')}</div>
   </div>`, {okText:'关闭', cancel:false});
 }
 // Home carousel: one page per announcement, latest 5 only. A page is one click target; the whole page
 // opens the drawer, and Enter/Space does the same through the delegated keydown handler.
 function anPage(a){
   return `<div class="an-page" data-action="anView" data-name="${escAttr(a.id)}" role="button" tabindex="0"
-      aria-label="查看公告: ${escAttr(a.title)}" title="查看全文">
+      aria-label="查看公告： ${escAttr(a.title)}" title="查看全文">
     <div class="an-page-head">
       <span class="an-title">${esc(a.title)}</span>
       <span class="an-time">${fmtDateTime(a.at)}</span>
       <span class="msym an-cue" aria-hidden="true">chevron_right</span>
     </div>
-    <div class="an-body">${esc(a.body||'(无内容)')}</div>
+    <div class="an-body">${esc(a.body||'（无内容）')}</div>
   </div>`;
 }
 async function renderAnnounce(){
@@ -624,9 +624,9 @@ async function renderAnnounce(){
   try{
     const d=await adapter.getAnnouncements(Store.abort('announce'));
     anItems=d.items||[];
-    list.innerHTML=anItems.length?anItems.map(anCard).join(''):'<div class="empty">暂无公告 — 点右上角「发布公告」添加</div>';
+    list.innerHTML=anItems.length?anItems.map(anCard).join(''):'<div class="empty">暂无公告 — 请使用右上角「发布公告」添加</div>';
   }catch(e){
-    if(e.name!=='AbortError') list.innerHTML='<div class="empty">读取失败: '+esc(e.message)+'</div>';
+    if(e.name!=='AbortError') list.innerHTML='<div class="empty">读取失败： '+esc(e.message)+'</div>';
   }
 }
 function anLocalDT(ms){  // ms -> datetime-local string (local timezone)
@@ -636,12 +636,12 @@ function anLocalDT(ms){  // ms -> datetime-local string (local timezone)
 function openAnnounceDialog(a){
   openDialog(a?'编辑公告':'发布公告', `<div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
     <md-outlined-text-field data-f="atitle" label="标题" value="${escAttr(a?a.title:'')}"></md-outlined-text-field>
-    <md-outlined-text-field data-f="abody" label="内容(可换行)" type="textarea" rows="5" value="${escAttr(a?a.body||'':'')}"></md-outlined-text-field>
-    <md-outlined-text-field data-f="atime" label="发布时间(留空=现在)" type="datetime-local" value="${a&&a.at?anLocalDT(a.at):''}"></md-outlined-text-field>
+    <md-outlined-text-field data-f="abody" label="内容（可换行）" type="textarea" rows="5" value="${escAttr(a?a.body||'':'')}"></md-outlined-text-field>
+    <md-outlined-text-field data-f="atime" label="发布时间（留空表示当前时间）" type="datetime-local" value="${a&&a.at?anLocalDT(a.at):''}"></md-outlined-text-field>
   </div>`, {okText:a?'保存':'发布', onOk:async ()=>{
     const v=dlgValue();
     const title=String(v.atitle||'').trim();
-    if(!title){ snack('标题不能为空',true); return false; }
+    if(!title){ snack('标题不可为空',true); return false; }
     let at;
     if(String(v.atime||'').trim()){
       at=new Date(String(v.atime).trim()).getTime();
@@ -664,7 +664,7 @@ function channelCard(ch){
   const mm=Object.entries(ch.modelMap||{}).filter(([k,v])=>v&&v!==k);
   const tags=`<span class="tag ${esc(ch.type)}">${esc(ch.type)}</span>`
     +(ch.default?'<span class="tag default">默认</span>':'')
-    +(ch.useResponses?'<span class="tag default" title="上游走 Responses API">⚡Responses</span>':'');
+    +(ch.useResponses?'<span class="tag default" title="上游使用 Responses API">⚡Responses</span>':'');
   const extra=[];
   if(ch.proxy && ch.proxy!=='-') extra.push('代理 '+esc(ch.proxy));
   if(ch.delayMs) extra.push('延迟 '+esc(String(ch.delayMs))+'ms');
@@ -680,10 +680,10 @@ function channelCard(ch){
     dot: ch.default?'ok':'',
     name: ch.name,
     tags,
-    side:`<span class="pv-bal loading" data-ch="${escAttr(ch.name)}" data-warn="${escAttr(ch.warnBelow||'')}" title="余额查询中">···</span>`,
+    side:`<span class="pv-bal loading" data-ch="${escAttr(ch.name)}" data-warn="${escAttr(ch.warnBelow||'')}" title="正在查询余额">···</span>`,
     lines,
     acts:`<button type="button" class="icon-act ${ch.default?'on':''}" data-action="setDefaultProvider" data-name="${escAttr(ch.name)}" ${ch.default?'disabled':''} title="${ch.default?'当前默认渠道':'设为默认渠道'}"><span class="msym">${ch.default?'star':'star_outline'}</span></button>
-      <button type="button" class="icon-act" data-action="chBalance" data-name="${escAttr(ch.name)}" title="查余额"><span class="msym">account_balance_wallet</span></button>
+      <button type="button" class="icon-act" data-action="chBalance" data-name="${escAttr(ch.name)}" title="查询余额"><span class="msym">account_balance_wallet</span></button>
       <button type="button" class="icon-act" data-action="editProvider" data-name="${escAttr(ch.name)}" title="编辑"><span class="msym">edit</span></button>
       <button type="button" class="icon-act err" data-action="deleteProvider" data-name="${escAttr(ch.name)}" title="删除"><span class="msym">delete</span></button>`,
   });
@@ -694,7 +694,7 @@ async function renderProviders(){
   try{
     const cfg=await adapter.getConfig(cur,signal); Store.configs.set(cur,cfg);
     const chs=cfg.channels||[];
-    $('#pv-list').innerHTML=chs.length?chs.map(channelCard).join(''):'<div class="empty">该实例暂无渠道，点右上「添加渠道」</div>';
+    $('#pv-list').innerHTML=chs.length?chs.map(channelCard).join(''):'<div class="empty">该实例暂无渠道，请使用右上角「添加渠道」</div>';
     fillProviderBalances(cur, signal);  // async: the cards paint first, balances land per channel
     const px=Object.entries(cfg.proxies||{});
     $('#px-list').innerHTML=px.length?px.map(([n,p])=>cardItem({
@@ -703,7 +703,7 @@ async function renderProviders(){
       lines:[`<span class="mono">${esc(p.host+':'+p.port)}</span>${p.username?' · 用户名认证':''}`],
       acts:`<button type="button" class="icon-act" data-action="editProxy" data-name="${escAttr(n)}" title="编辑"><span class="msym">edit</span></button>
         <button type="button" class="icon-act err" data-action="delProxy" data-name="${escAttr(n)}" title="删除"><span class="msym">delete</span></button>`,
-    })).join(''):'<div class="empty">暂无代理，渠道可留空直连</div>';
+    })).join(''):'<div class="empty">暂无代理；渠道可留空，直接连接</div>';
   }catch(e){ if(e.name!=='AbortError') snack(e.message,true); }
 }
 
@@ -725,14 +725,14 @@ function rtRenderChips(){
   const box=$('#rt-extra-chips'); if(!box) return;
   box.innerHTML=rtExtra.length?rtExtra.map((r,i)=>
     `<span class="mm-chip" data-i="${i}"><span class="nm mono" title="${escAttr(r)}">${esc(r)}</span><button class="mm-x" data-i="${i}" aria-label="删除">✕</button></span>`).join('')
-    :'<span class="muted small">暂无自定义规则 — 填上方正则后点 + 添加</span>';
+    :'<span class="muted small">暂无自定义规则 — 请填写上方正则后点击 + 添加</span>';
 }
 function rtAddChip(){
   const f=$('#rt-extra-find'); if(!f) return;
   const re=String(f.value||'').trim();
-  if(!re){ snack('先填一条正则',true); return; }
-  try{ new RegExp(re); }catch(e){ snack('正则无效: '+e.message,true); return; }
-  if(rtExtra.includes(re)){ snack('规则已存在',true); return; }
+  if(!re){ snack('请先填写一条正则',true); return; }
+  try{ new RegExp(re); }catch(e){ snack('正则表达式无效： '+e.message,true); return; }
+  if(rtExtra.includes(re)){ snack('该规则已存在',true); return; }
   if(rtExtra.length>=50){ snack('最多 50 条规则',true); return; }
   rtExtra.push(re); f.value=''; rtRenderChips();
 }
@@ -755,7 +755,7 @@ async function renderRouting(){
     $('#rt-channels').innerHTML = chs.length ? `<div class="tbl-wrap"><table class="tbl" id="rt-ch-table" aria-label="渠道与映射">
       <thead><tr><th style="width:34%">名称</th><th style="width:24%">渠道</th><th style="width:9%">类型</th><th style="width:21%">映射</th><th style="width:12%">地址</th></tr></thead>
       <tbody>${chs.map(ch=>{
-        const tags=(ch.default?' <span class="tag default">default</span>':'')+(ch.useResponses?' <span class="tag default" title="该 OpenAI 渠道上游走 Responses API">⚡Responses</span>':'');
+        const tags=(ch.default?' <span class="tag default">default</span>':'')+(ch.useResponses?' <span class="tag default" title="该 OpenAI 渠道的上游使用 Responses API">⚡Responses</span>':'');
         const ms=[]; for(const m of (ch.models||[])) if(!ms.includes(m)) ms.push(m);
         for(const k of Object.keys(ch.modelMap||{})) if(!ms.includes(k)) ms.push(k);
         if(!ms.length) return `<tr>
@@ -790,9 +790,9 @@ async function renderKeys(){
 
 
     $('#ky-webToken').value = cfg.webToken && cfg.webToken!=='(已设)' ? cfg.webToken : '';
-    $('#ky-webToken').placeholder = cfg.webToken==='(已设)' ? '(已设, 留空不改)' : '留空=不启用 API 令牌';
+    $('#ky-webToken').placeholder = cfg.webToken==='(已设)' ? '（已设，留空表示不修改）' : '留空表示不启用 API 令牌';
     $('#ky-channels').innerHTML=(cfg.channels||[]).map(ch=>
-      `<md-outlined-text-field data-keyfor="${escAttr(ch.name)}" label="${esc(ch.name)} (${esc(ch.type)})" type="password" value="${esc(ch.apiKey||'')}" placeholder="${ch.hasKey?'(已设)':'API Key'}"></md-outlined-text-field>`
+      `<md-outlined-text-field data-keyfor="${escAttr(ch.name)}" label="${esc(ch.name)} (${esc(ch.type)})" type="password" value="${esc(ch.apiKey||'')}" placeholder="${ch.hasKey?'（已设）':'API Key'}"></md-outlined-text-field>`
     ).join('');
     $('#rg-keyLength').value=cfg.keyLength||24;
   }catch(e){ if(e.name!=='AbortError') snack(e.message,true); }
@@ -803,19 +803,19 @@ async function renderKeys(){
 async function loadAdminAuth(inst){
   try{
     const d=await adapter.getAdminAuth(inst);
-    $('#ka-status').innerHTML = '管理密码: '+(d.hasAdminKey?'<b style="color:var(--md-sys-color-primary)">已设</b>':'<b style="color:var(--md-sys-color-error)">未设(危险)</b>')
-      +' · 第二密码: '+(d.secondKeySet?'<b style="color:var(--md-sys-color-primary)">已启用</b>':'未启用')
+    $('#ka-status').innerHTML = '管理密码： '+(d.hasAdminKey?'<b style="color:var(--md-sys-color-primary)">已设</b>':'<b style="color:var(--md-sys-color-error)">未设置（危险）</b>')
+      +' · 第二密码： '+(d.secondKeySet?'<b style="color:var(--md-sys-color-primary)">已启用</b>':'未启用')
       +' · TOTP: '+(d.totpEnabled?'<b style="color:var(--md-sys-color-primary)">已启用</b>':'未启用');
     $('#ka-totp-info').style.display = d.totpEnabled ? '' : 'none';
     // the secret itself is only returned once, right after enable (POST /admin-api/admin-auth)
     const pf=d.profile||{};
-    $('#ka-profile-name').textContent = pf.name || '(未设置名称)';
+    $('#ka-profile-name').textContent = pf.name || '（未设置名称）';
     $('#ka-profile-text').textContent = pf.profile || '';
     $('#ka-profile-other').textContent = pf.other || '';
     const av=$('#ka-profile-avatar');
     if(pf.avatar){ av.src=pf.avatar; av.style.display=''; } else { av.removeAttribute('src'); av.style.display='none'; }
     $('#ka-profile-expire').textContent = d.expireAt ? ('面板会话将于 '+new Date(d.expireAt).toLocaleString()+' 到期') : '';
-  }catch(e){ $('#ka-status').textContent='加载失败: '+e.message; }
+  }catch(e){ $('#ka-status').textContent='加载失败： '+e.message; }
 }
 
 // ---- Card settings save ----
@@ -837,7 +837,7 @@ async function renderPorts(){
       const isSelf=i.name===Store.currentName;
       let power;
       if(!i.running) power=`<md-filled-button data-cmd="start" data-name="${escAttr(i.name)}">启动</md-filled-button>`;
-      else if(Store.multi&&i.name==='default') power=`<md-text-button disabled title="单进程模式: default 承载主端口, 不能停止">停止 <span class="msym">lock</span></md-text-button>`;
+      else if(Store.multi&&i.name==='default') power=`<md-text-button disabled title="单进程模式：default 承载主端口，无法停止">停止 <span class="msym">lock</span></md-text-button>`;
       else power=`<md-text-button data-cmd="stop" data-name="${escAttr(i.name)}" style="color:var(--md-sys-color-error)">停止</md-text-button>`;
       const prefix=Store.multi?(i.name==='default'?'无前缀':('/'+i.name)):null;
       const tags=(isSelf?'<span class="tag default"><span class="msym">home</span>面板</span>':'')+(i.tlsOn?'<span class="tag default">TLS</span>':'');
@@ -865,7 +865,7 @@ async function loadTunnel(){
     const d=await adapter.getTunnel();
     renderTunnel(d);
     if(d.running && !d.url){ clearTimeout(tnTimer); tnTimer=setTimeout(loadTunnel,2000); }
-  }catch(e){ $('#tn-status').textContent='查询失败: '+e.message; }
+  }catch(e){ $('#tn-status').textContent='查询失败： '+e.message; }
 }
 function renderTunnel(d){
   $('#tn-toggle').textContent = d.running ? '停止隧道' : '启动隧道';
@@ -874,7 +874,7 @@ function renderTunnel(d){
     $('#tn-url-row').style.display='flex';
     $('#tn-url').textContent=d.url;
   } else if(d.running){
-    $('#tn-status').textContent='启动中, 等待域名分配…';
+    $('#tn-status').textContent='启动中，正在等待域名分配…';
     $('#tn-url-row').style.display='none';
   } else {
     $('#tn-status').textContent='未启动';
@@ -909,24 +909,24 @@ function cardDialogHtml(k){
   const role=k&&k.role==='admin'?'admin':'user';
   return `
     <div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
-      <md-outlined-text-field data-f="name" label="名称(给谁用的)" value="${escAttr(k&&k.name||'')}" required></md-outlined-text-field>
-      <md-outlined-select data-f="role" label="角色" helper="用户卡调用 API; 管理卡只能进管理 API">
-        <md-select-option value="user" ${role!=='admin'?'selected':''}>用户卡 (调用 API)</md-select-option>
-        <md-select-option value="admin" ${role==='admin'?'selected':''}>管理卡 (管理 API)</md-select-option>
+      <md-outlined-text-field data-f="name" label="名称（使用对象）" value="${escAttr(k&&k.name||'')}" required></md-outlined-text-field>
+      <md-outlined-select data-f="role" label="角色" helper="用户卡用于调用 API；管理卡仅可访问管理 API">
+        <md-select-option value="user" ${role!=='admin'?'selected':''}>用户卡（调用 API）</md-select-option>
+        <md-select-option value="admin" ${role==='admin'?'selected':''}>管理卡（管理 API）</md-select-option>
       </md-outlined-select>
-      <md-outlined-text-field data-f="quotaWan" label="额度(万 tokens)" type="number" value="${quota?String(quota/10000):'0'}" helper="0 或留空=不限量; 100 = 100万 tokens"></md-outlined-text-field>
+      <md-outlined-text-field data-f="quotaWan" label="额度（万 tokens）" type="number" value="${quota?String(quota/10000):'0'}" helper="0 或留空表示不限量；100 表示 100 万 tokens"></md-outlined-text-field>
       <div class="grid-form">
-        <md-outlined-text-field data-f="rpm" label="RPM (次/分钟)" type="number" value="${Number(k&&k.rpm)||0}" helper="0=不限; 60 秒滑动窗口"></md-outlined-text-field>
-        <md-outlined-text-field data-f="tpm" label="TPM (tokens/分钟)" type="number" value="${Number(k&&k.tpm)||0}" helper="0=不限; 按输入+输出计"></md-outlined-text-field>
+        <md-outlined-text-field data-f="rpm" label="RPM（次/分钟）" type="number" value="${Number(k&&k.rpm)||0}" helper="0 表示不限；60 秒滑动窗口"></md-outlined-text-field>
+        <md-outlined-text-field data-f="tpm" label="TPM（tokens/分钟）" type="number" value="${Number(k&&k.tpm)||0}" helper="0 表示不限；按输入与输出合计"></md-outlined-text-field>
       </div>
-      <md-outlined-text-field data-f="expiresAt" label="有效期(留空=永久)" value="${escAttr(k&&k.expiresAt||'')}" placeholder="2026-12-31" helper="到期自动拒绝; 支持 YYYY-MM-DD"></md-outlined-text-field>
-      <div class="perm-title">实例权限 <span class="perm-hint">不勾选 = 仅发卡实例; 跨实例需勾选目标</span></div>
+      <md-outlined-text-field data-f="expiresAt" label="有效期（留空表示永久）" value="${escAttr(k&&k.expiresAt||'')}" placeholder="2026-12-31" helper="到期后自动拒绝；支持 YYYY-MM-DD"></md-outlined-text-field>
+      <div class="perm-title">实例权限 <span class="perm-hint">不勾选表示仅限发卡实例；跨实例使用需勾选目标实例</span></div>
       ${cardPermBox('branches', insts, k&&k.branches)}
-      <div class="perm-title">提供商权限 <span class="perm-hint">不勾选 = 当前实例全部提供商</span></div>
+      <div class="perm-title">提供商权限 <span class="perm-hint">不勾选表示当前实例的全部提供商</span></div>
       ${cardPermBox('channels', chs, k&&k.channels)}
-      <md-outlined-text-field data-f="channelsExtra" label="额外提供商(逗号分隔, 可留空)" value="${escAttr(chExtra.join(', '))}" helper="其他实例的提供商名或 * 通配; 与上方勾选合并"></md-outlined-text-field>
-      <md-outlined-text-field data-f="models" label="模型权限(逗号分隔)" value="${escAttr((k&&k.models||[]).join(', '))}" helper="留空=全部; 支持 * 通配, 例如 gpt-4*"></md-outlined-text-field>
-      <md-outlined-text-field data-f="note" label="备注(可选)" value="${escAttr(k&&k.note||'')}"></md-outlined-text-field>
+      <md-outlined-text-field data-f="channelsExtra" label="额外提供商（逗号分隔，可留空）" value="${escAttr(chExtra.join(', '))}" helper="其他实例的提供商名或 * 通配符；与上方勾选结果合并"></md-outlined-text-field>
+      <md-outlined-text-field data-f="models" label="模型权限（逗号分隔）" value="${escAttr((k&&k.models||[]).join(', '))}" helper="留空表示全部；支持 * 通配符，例如 gpt-4*"></md-outlined-text-field>
+      <md-outlined-text-field data-f="note" label="备注（可选）" value="${escAttr(k&&k.note||'')}"></md-outlined-text-field>
     </div>`;
 }
 function cardBodyFromDialog(key){
@@ -954,7 +954,7 @@ async function renderCards(){
     Store.configs.set(cur,cfg);
     const keys=data.keys||[];
     cardCache=keys;
-    if(!keys.length){ $('#cd-list').innerHTML='<div class="empty" style="padding:24px;text-align:center;color:var(--md-sys-color-on-surface-variant)">暂无用户卡 · 点右上角「发卡」给朋友发一个</div>'; return; }
+    if(!keys.length){ $('#cd-list').innerHTML='<div class="empty" style="padding:24px;text-align:center;color:var(--md-sys-color-on-surface-variant)">暂无用户卡 · 请使用右上角「发卡」新建</div>'; return; }
     $('#cd-list').innerHTML=keys.map(k=>{
       const quota=k.quotaTokens||0, used=k.usedTokens||0;
       const pct=quota>0?Math.min(100,Math.round(used/quota*100)):0;
@@ -981,10 +981,10 @@ async function renderCards(){
       const expireTxt=k.expiresAt?`${String(k.expiresAt).slice(0,10)}到期`:null;
       return cardItem({
         dot:stateColor===ERROR_COLOR?'err':'ok',
-        name:k.name||'(无名卡)',
+        name:k.name||'（无名卡）',
         tags:`<span class="tag" style="color:${k.role==='admin'?'var(--md-sys-color-tertiary)':stateColor}">${k.role==='admin'?'管理':state}</span>`,
         lines:[
-          `<span class="mono">${esc(k.key.slice(0,10))}…</span> · 用量 ${fmtTok(used)}${quota>0?' / '+fmtTok(quota)+' ('+pct+'%)':'(不限额)'} · ${esc(limTxt)}`,
+          `<span class="mono">${esc(k.key.slice(0,10))}…</span> · 用量 ${fmtTok(used)}${quota>0?' / '+fmtTok(quota)+' ('+pct+'%)':'（不限额）'} · ${esc(limTxt)}`,
           nowTxt?esc(nowTxt):'',
           esc(permTxt),
           esc(modelTxt),
@@ -1005,16 +1005,16 @@ async function openCardDialog(){
   if(!Store.configs.get(Store.inst)){
     try{ Store.configs.set(Store.inst, await adapter.getConfig(Store.inst)); }catch(e){}
   }
-  openDialog('发新卡 (实例 '+Store.inst+')', cardDialogHtml(null), {onOk:async ()=>{
+  openDialog('发新卡（实例 '+Store.inst+'）', cardDialogHtml(null), {onOk:async ()=>{
     const body=cardBodyFromDialog(undefined);
     if(!body.name){ snack('名称必填',true); return false; }
     try{
       const r=await adapter.createKey(Store.inst,body);
       const k=r.key||{};
       openDialog('发卡成功', `<div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
-        <div style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">完整 Key (配置里可查, 也可随时回来复制):</div>
+        <div style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">完整 Key（可在配置中查看，也可随时返回复制）：</div>
         <div class="mono" style="word-break:break-all;background:var(--md-sys-color-surface-container);padding:8px;border-radius:10px;user-select:all">${esc(k.key||'')}</div>
-        <div style="font-size:10px">客户端用法: base_url 填 <span class="mono">http://&lt;网关地址&gt;:${Store.mainPort||'主端口'}/${esc(Store.inst==='default'?'':Store.inst+'/')}v1</span>（末尾 /v1 可省略）, API Key 填上面的 Key</div>
+        <div style="font-size:10px">客户端用法：base_url 填写 <span class="mono">http://&lt;网关地址&gt;:${Store.mainPort||'主端口'}/${esc(Store.inst==='default'?'':Store.inst+'/')}v1</span>（末尾 /v1 可省略），API Key 填写上方 Key</div>
         <md-filled-button id="cd-copy-new">复制 Key</md-filled-button>
       </div>`, {okText:'关闭', cancel:false});
       setTimeout(()=>{ const b=$('#cd-copy-new'); if(b) b.onclick=()=>{ navigator.clipboard&&navigator.clipboard.writeText(k.key||''); snack('已复制'); }; },50);
@@ -1027,7 +1027,7 @@ async function openCardDialog(){
 // ---- Edit an existing card: same form, complete permission set ----
 function openCardEdit(key){
   const k=cardCache.find(x=>x.key===key);
-  if(!k){ snack('卡密列表已刷新, 请重试',true); return; }
+  if(!k){ snack('卡密列表已刷新，请重试',true); return; }
   openDialog('编辑用户卡 · '+(k.name||key.slice(0,10)), cardDialogHtml(k), {onOk:async ()=>{
     const body=cardBodyFromDialog(key);
     if(!body.name){ snack('名称必填',true); return false; }
@@ -1043,13 +1043,13 @@ async function cardAction(action,key,name,on){
     if(action==='editKey'){ openCardEdit(key); return; }
     if(action==='toggleKey'){ await adapter.updateKey(Store.inst,{key,enable:!on}); snack(on?'已禁用':'已启用'); renderCards(); return; }
     if(action==='delKey'){
-      if(!confirm('删除卡密「'+(name||key.slice(0,10))+'」? 该Key立即失效。')) return;
+      if(!confirm('删除卡密「'+(name||key.slice(0,10))+'」？该 Key 立即失效。')) return;
       await adapter.deleteKey(Store.inst,key); snack('已删除'); renderCards(); return;
     }
     if(action==='rechargeKey'){
       openDialog('充值/重置 「'+esc(name||'')+'」', `
         <div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
-          <md-outlined-text-field data-f="addWan" label="追加额度(万 tokens)" type="number" value="0" helper="在现有额度上追加; 0=不变"></md-outlined-text-field>
+          <md-outlined-text-field data-f="addWan" label="追加额度（万 tokens）" type="number" value="0" helper="在现有额度上追加；0 表示不变"></md-outlined-text-field>
           <label style="display:flex;align-items:center;gap:4px;font-size:11px"><md-checkbox data-f="reset"></md-checkbox>重置已用量为 0</label>
           <label style="display:flex;align-items:center;gap:4px;font-size:11px"><md-checkbox data-f="resetRate"></md-checkbox>清除本分钟 RPM/TPM 窗口</label>
         </div>`, {onOk:async ()=>{
@@ -1090,7 +1090,7 @@ function pvPaintBal(el, item){
   el.classList.remove('loading','err','low');
   if(!item.ok){
     el.textContent='—'; el.classList.add('err');
-    el.title='余额查询失败: '+(item.error||'未知错误');
+    el.title='余额查询失败： '+(item.error||'未知错误');
     return;
   }
   el.textContent=balLabel(item.balance, item.unit);
@@ -1297,12 +1297,12 @@ async function renderLogs(){
   try{
     const lines=+($('#lg-lines').value||100);
     const [txt,cfg,reqs,lgc]=await Promise.all([
-      adapter.getLogs(cur,lines,signal).catch(e=>{ if(e.name==='AbortError') throw e; return '读取失败: '+e.message; }),
+      adapter.getLogs(cur,lines,signal).catch(e=>{ if(e.name==='AbortError') throw e; return '读取失败： '+e.message; }),
       adapter.getConfig(cur,signal).catch(e=>{ if(e.name==='AbortError') throw e; return null; }),
       adapter.getRequests(cur,signal).catch(e=>{ if(e.name==='AbortError') throw e; return []; }),
       adapter.getLogCfg(cur,signal).catch(e=>{ if(e.name==='AbortError') throw e; return null; }),
     ]);
-    const next=txt||'(空)';
+    const next=txt||'（空）';
     // Replace in place only when the text really changed: identical content leaves scroll and layout untouched
     if(box.textContent!==next){
       const stick=(box.scrollHeight-box.scrollTop-box.clientHeight)<24;
@@ -1318,7 +1318,7 @@ async function renderLogs(){
     }
     renderReqRows(reqs);
     if(lgc) lgApply(lgc);
-  }catch(e){ if(e.name!=='AbortError'){ box.textContent='读取失败: '+e.message; } }
+  }catch(e){ if(e.name!=='AbortError'){ box.textContent='读取失败： '+e.message; } }
 }
 // Record settings save themselves on change (no save button); an unchanged value returns early so a mere focus/blur does not restart the instance.
 // Switch and address can land in the same tick (typing then tapping the switch): the second call is queued, not dropped, and re-reads both fields.
@@ -1368,7 +1368,7 @@ function lgState(st){
     el.textContent='已托管 '+(String(st.file||'').split('/').pop()||'gateway.log')
       +' · 当前 '+(kb>=1024?(kb/1024).toFixed(2)+' MB':kb+' KB');
   } else {
-    el.textContent='当前进程未托管日志文件 (需由 agw.sh 启动) · 设置已保存';
+    el.textContent='当前进程未托管日志文件（需由 agw.sh 启动） · 设置已保存';
   }
 }
 function lgApply(st){
@@ -1428,8 +1428,8 @@ async function viewRecordBody(id){
     const r=d.record||{};
     const fmt=v=>typeof v==='string'?v:JSON.stringify(v,null,2);
     $('#dlgBody').innerHTML='<div class="rec-meta mono">'+esc(r.time||'')+' · '+esc(r.model||'')+' · 渠道 '+esc(r.channel||'-')+' · 状态 '+(r.status??'')+' · '+(r.duration||0)+'ms · tokens '+(r.inputTokens||0)+'/'+(r.outputTokens||0)+'</div>'
-      +'<div style="font-size:10px;font-weight:600">请求</div><pre class="rec-pre mono">'+esc(fmt(r.request??'(无)'))+'</pre>'
-      +'<div style="font-size:10px;font-weight:600">响应</div><pre class="rec-pre mono">'+esc(fmt(r.response??'(无)'))+'</pre>';
+      +'<div style="font-size:10px;font-weight:600">请求</div><pre class="rec-pre mono">'+esc(fmt(r.request??'（无）'))+'</pre>'
+      +'<div style="font-size:10px;font-weight:600">响应</div><pre class="rec-pre mono">'+esc(fmt(r.response??'（无）'))+'</pre>';
   }catch(e){ $('#dlgBody').innerHTML='<div style="padding:4px;color:var(--md-sys-color-error)">'+esc(e.message)+'</div>'; }
 }
 
@@ -1514,7 +1514,7 @@ function saveTheme(){localStorage.setItem('agw-theme',JSON.stringify(themeState)
 function openThemeDialog(){
   openDialog('主题',`<div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
     <label style="display:flex;align-items:center;gap:4px"><md-switch id="th-dark" ${themeState.mode==='dark'?'selected':''}></md-switch><span style="font-size:11px">深色主题</span></label>
-    <div><div style="font-size:10px;color:var(--md-sys-color-on-surface-variant);margin-bottom:8px">主色 (Material You)</div>
+    <div><div style="font-size:10px;color:var(--md-sys-color-on-surface-variant);margin-bottom:8px">主色（Material You）</div>
     <div id="th-swatches" style="display:flex;gap:4px;flex-wrap:wrap"></div>
     <div style="display:flex;align-items:center;gap:8px;margin-top:8px"><button type="button" class="btn sm outline" id="th-mdu">从手机取色</button><span style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">Material You 壁纸色</span><input type="color" id="th-custom" value="${themeState.seed}" style="width:32px;height:29px;border:none;border-radius:8px;cursor:pointer;background:none"><span style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">自定义颜色</span></div></div>
   </div>`,{okText:'完成',cancel:false});
@@ -1533,7 +1533,7 @@ function openThemeDialog(){
       applySeed('#'+hex);
       mduBtn.textContent='已应用 #'+hex;
     }catch(e){
-      snack('取色桥不可用 ('+e.message+'), 改为选一张壁纸取色', true);
+      snack('取色桥不可用（'+e.message+'），请改为选择一张壁纸取色', true);
       mduBtn.textContent=old;
       pickWallpaperColor(mduBtn);
     }
@@ -1557,7 +1557,7 @@ function pickWallpaperColor(btn){
       const hex=await dominantColor(f);
       applySeed(hex);
       btn.textContent='已应用 '+hex;
-    }catch(e){ snack('取色失败: '+(e.message||e),true); btn.textContent=old; }
+    }catch(e){ snack('取色失败： '+(e.message||e),true); btn.textContent=old; }
     btn.disabled=false;
   });
   inp.click();
@@ -1609,14 +1609,14 @@ function openKeyDialog(){
   if(keyDlgVisible()) return;
   openDialog('管理令牌', `
     <div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
-      <md-outlined-text-field data-f="key" label="管理 API 令牌(可选)" type="password" value="${escAttr(localStorage.getItem('agw-admin-key')||'')}"
-        helper="面板登录请用 agw web login 的一次性链接; 这里只用于脚本/API 的 webToken"></md-outlined-text-field>
+      <md-outlined-text-field data-f="key" label="管理 API 令牌（可选）" type="password" value="${escAttr(localStorage.getItem('agw-admin-key')||'')}"
+        helper="面板登录请使用 agw web login 生成的一次性链接；此处仅用于脚本/API 的 webToken"></md-outlined-text-field>
     </div>`, {okText:'保存', onOk:saveKey});
 }
 async function saveKey(){
   const k=String(dlgValue().key||'').trim();
   if(k) localStorage.setItem('agw-admin-key',k); else localStorage.removeItem('agw-admin-key');
-  snack(k?'令牌已记住, 正在刷新…':'已清除记住的令牌, 正在刷新…');
+  snack(k?'令牌已记住，正在刷新…':'已清除已记住的令牌，正在刷新…');
   setTimeout(()=>location.reload(),600);
   return true;
 }
@@ -1627,12 +1627,12 @@ function renderMmChips(){
     '<span class="mm-chip" data-i="'+i+'"><span class="nm">'+esc(k)+'</span>'
     +(k===v?'':'<span class="arrow">→</span><span class="nm">'+esc(v)+'</span>')
     +'<button class="mm-x" data-i="'+i+'" aria-label="删除">✕</button></span>').join('')
-    :'<span style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">暂无映射 — 填上方两框后点 + 添加 (左滑标签或点 ✕ 删除)</span>';
+    :'<span style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">暂无映射 — 请填写上方两栏后点击 + 添加（左滑标签或点击 ✕ 删除）</span>';
 }
 function mmAdd(){
   const a=($('#mm-alias').value||'').trim(), r=($('#mm-real').value||'').trim();
-  if(!a){ snack('先填左框(对外名)',true); return; }
-  if(!/^[A-Za-z0-9_.\/:@+~-]+$/.test(a)){ snack('对外名建议只用字母/数字/._/:@+~-',true); return; }
+  if(!a){ snack('请先填写左栏（对外名）',true); return; }
+  if(!/^[A-Za-z0-9_.\/:@+~-]+$/.test(a)){ snack('对外名建议仅使用字母、数字及 . _ / : @ + ~ -',true); return; }
   if(mmList.some(([k])=>k===a)){ snack('覆盖名 '+a+' 已存在',true); return; }
   mmList.push([a,r||a]);
   $('#mm-alias').value=''; $('#mm-real').value='';
@@ -1670,7 +1670,7 @@ function mmShowModelPicker(list){
   box.style.cssText='border:1px solid var(--md-sys-color-outline-variant);border-radius:10px;padding:8px;max-height:184px;overflow-y:auto';
   const head=document.createElement('div');
   head.style.cssText='display:flex;align-items:center;gap:4px;margin-bottom:8px';
-  head.innerHTML='<span style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">已获取 '+list.length+' 个, 勾选后填入</span>'
+  head.innerHTML='<span style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">已获取 '+list.length+' 个，勾选后填入</span>'
     +'<button type="button" class="pbtn pbtn-text" id="mmSelAll" style="height:21px;padding:0 12px;margin-left:auto">全选</button>'
     +'<button type="button" class="pbtn pbtn-text" id="mmSelNone" style="height:21px;padding:0 12px">清空</button>'
     +'<button type="button" class="pbtn pbtn-filled" id="mmSelOk" style="height:21px;padding:0 12px">填入</button>'
@@ -1721,29 +1721,29 @@ function openProviderDialog(ch){
         ${['openai','claude','gemini'].map(t=>`<md-select-option value="${t}" ${t===c.type?'selected':''}>${t}</md-select-option>`).join('')}
       </md-outlined-select>
       <md-outlined-text-field data-f="baseUrl" label="Base URL" value="${escAttr(c.baseUrl)}" placeholder="https://…/v1"></md-outlined-text-field>
-      <md-outlined-text-field data-f="path" label="固定路径 (可选)" value="${escAttr(c.path||'')}" placeholder="/v1/chat/completions" helper="填了则所有请求都发往 baseUrl+path, 忽略客户端路径与查询; 留空=自动"></md-outlined-text-field>
-      <md-outlined-select data-f="proxy" label="代理(-为直连)" style="width:100%">
+      <md-outlined-text-field data-f="path" label="固定路径（可选）" value="${escAttr(c.path||'')}" placeholder="/v1/chat/completions" helper="填写后所有请求均发往 baseUrl+path，忽略客户端路径与查询参数；留空表示自动"></md-outlined-text-field>
+      <md-outlined-select data-f="proxy" label="代理（- 表示直连）" style="width:100%">
         ${pOpts.map(o=>`<md-select-option value="${escAttr(o)}" ${o===curP?'selected':''}>${o==='-'?'- 直连':esc(o)}</md-select-option>`).join('')}
       </md-outlined-select>
-      <md-outlined-text-field data-f="models" label="模型(逗号分隔)" value="${escAttr((c.models||[]).join(', '))}"></md-outlined-text-field>
-      <md-outlined-text-field data-f="delayMs" label="请求延迟(毫秒, 0=关闭)" type="number" value="${escAttr(String(c.delayMs||0))}" helper="每个请求发出前等待这么久; 同渠道并发请求按此间隔排队发出, 可缓解 429 限流"></md-outlined-text-field>
-      <md-outlined-text-field data-f="paramOverride" label="参数覆写 (JSON, 留空=不覆写)" type="textarea" rows="3" value="${escAttr(c.paramOverride?JSON.stringify(c.paramOverride,null,2):'')}" helper="覆写最终发往上游的请求体, 盖过 SDK 同名参数; 对象深合并, 数组整体替换, null=删除该参数; 键名按渠道方言(openai/claude/gemini)写"></md-outlined-text-field>
+      <md-outlined-text-field data-f="models" label="模型（逗号分隔）" value="${escAttr((c.models||[]).join(', '))}"></md-outlined-text-field>
+      <md-outlined-text-field data-f="delayMs" label="请求延迟（毫秒，0 表示关闭）" type="number" value="${escAttr(String(c.delayMs||0))}" helper="每个请求发出前等待该时长；同渠道并发请求按此间隔排队发出，可缓解 429 限流"></md-outlined-text-field>
+      <md-outlined-text-field data-f="paramOverride" label="参数覆写（JSON，留空表示不覆写）" type="textarea" rows="3" value="${escAttr(c.paramOverride?JSON.stringify(c.paramOverride,null,2):'')}" helper="覆写最终发往上游的请求体，覆盖 SDK 同名参数；对象深度合并，数组整体替换，null 表示删除该参数；键名按渠道方言（openai/claude/gemini）书写"></md-outlined-text-field>
       <div>
-        <div style="font-size:10px;color:var(--md-sys-color-on-surface-variant);margin-bottom:8px">模型改名 (对外名 → 真实名; 右框留空=按原名提供; 手机上左滑标签可删除; 对外名会出现在 /v1/models; 重启实例后生效)</div>
+        <div style="font-size:10px;color:var(--md-sys-color-on-surface-variant);margin-bottom:8px">模型改名（对外名 → 真实名；右栏留空表示按原名提供；可在手机上左滑标签删除；对外名将出现在 /v1/models；重启实例后生效）</div>
         <div class="mm-row">
-          <md-outlined-text-field id="mm-alias" label="覆盖名(对外)"></md-outlined-text-field>
-          <md-outlined-text-field id="mm-real" label="原始名(可空)"></md-outlined-text-field>
+          <md-outlined-text-field id="mm-alias" label="覆盖名（对外）"></md-outlined-text-field>
+          <md-outlined-text-field id="mm-real" label="原始名（可留空）"></md-outlined-text-field>
           <button type="button" class="mm-add-btn" id="mm-add" aria-label="添加"><span class="msym">add</span></button>
         </div>
         <div class="mm-chips" id="mmChips"></div>
       </div>
-      <md-outlined-text-field data-f="apiKey" label="API Key" type="password" value="${escAttr(c.apiKey||'')}" placeholder="${c.hasKey?'(已设, 留空不改)':'API Key'}"></md-outlined-text-field>
-      <label style="display:flex;align-items:center;gap:4px;font-size:11px"><md-checkbox data-f="useResponses" ${c.useResponses?'selected':''}></md-checkbox>上游用 Responses API <span class="muted small">(仅 openai 类型; 不勾=自动: Responses 客户端直通 /v1/responses, Chat 客户端直通 chat)</span></label>
-      <label style="display:flex;align-items:center;gap:4px;font-size:11px"><md-checkbox data-f="probe" ${c.probe?'selected':''}></md-checkbox>参与成功率探测 <span class="muted small">(需实例开启 probe; 用户端可见成功率)</span></label>
-      <div class="muted small" style="margin-top:8px">上游余额 (列表里 💰 按钮查; 三项留空 = 用内置预设)</div>
-      <md-outlined-text-field data-f="balanceUrl" label="余额接口 URL (可相对 Base URL)" value="${escAttr(c.balanceUrl||'')}" placeholder="/v1/user/info"></md-outlined-text-field>
-      <md-outlined-text-field data-f="balancePath" label="取值路径 (点路径)" value="${escAttr(c.balancePath||'')}" placeholder="data.balance"></md-outlined-text-field>
-      <md-outlined-text-field data-f="balanceUnit" label="单位 (可选)" value="${escAttr(c.balanceUnit||'')}" placeholder="CNY"></md-outlined-text-field>
+      <md-outlined-text-field data-f="apiKey" label="API Key" type="password" value="${escAttr(c.apiKey||'')}" placeholder="${c.hasKey?'（已设，留空表示不修改）':'API Key'}"></md-outlined-text-field>
+      <label style="display:flex;align-items:center;gap:4px;font-size:11px"><md-checkbox data-f="useResponses" ${c.useResponses?'selected':''}></md-checkbox>上游使用 Responses API <span class="muted small">（仅限 openai 类型；不勾选表示自动：Responses 客户端直通 /v1/responses，Chat 客户端直通 chat）</span></label>
+      <label style="display:flex;align-items:center;gap:4px;font-size:11px"><md-checkbox data-f="probe" ${c.probe?'selected':''}></md-checkbox>参与成功率探测 <span class="muted small">（需实例开启 probe；用户端可见成功率）</span></label>
+      <div class="muted small" style="margin-top:8px">上游余额（列表内点击 💰 按钮查询；三项留空表示使用内置预设）</div>
+      <md-outlined-text-field data-f="balanceUrl" label="余额接口 URL（可相对 Base URL）" value="${escAttr(c.balanceUrl||'')}" placeholder="/v1/user/info"></md-outlined-text-field>
+      <md-outlined-text-field data-f="balancePath" label="取值路径（点号路径）" value="${escAttr(c.balancePath||'')}" placeholder="data.balance"></md-outlined-text-field>
+      <md-outlined-text-field data-f="balanceUnit" label="单位（可选）" value="${escAttr(c.balanceUnit||'')}" placeholder="CNY"></md-outlined-text-field>
       <label style="display:flex;align-items:center;gap:4px;font-size:11px"><md-checkbox data-f="default" ${c.default?'selected':''}></md-checkbox>设为默认渠道</label>
     </div>`, {onOk:saveProvider});
   const s=$('#dlgBody [data-f=type]');
@@ -1786,9 +1786,9 @@ function openPortDialog(name){
   const i=Store.instances.find(x=>x.name===name)||{};
   openDialog(name?'编辑实例 '+name:'新建实例', `
     <div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
-      <md-outlined-text-field data-f="name" label="实例名" value="${escAttr(i.name||'')}" ${(name==='default')?'disabled':''} required helper="${name?(name==='default'?'主实例不能改名':'改名会同步改配置文件名, 热生效'):'只能含字母/数字/中划线/下划线'}"></md-outlined-text-field>
-      <md-outlined-text-field data-f="port" label="端口" type="number" value="${i.port||16390}" helper="${(i.tlsOn||(name&&name!=='default'))?'开 HTTPS 的实例只经主端口访问, 此端口仅作标识':'监听端口(开 HTTPS 后只提供 https)'}"></md-outlined-text-field>
-      <md-outlined-text-field data-f="webToken" label="访问令牌" type="password" value="" helper="留空保存=清除访问令牌"></md-outlined-text-field>
+      <md-outlined-text-field data-f="name" label="实例名" value="${escAttr(i.name||'')}" ${(name==='default')?'disabled':''} required helper="${name?(name==='default'?'主实例不支持改名':'改名会同步修改配置文件名，热生效'):'仅可包含字母、数字、中划线、下划线'}"></md-outlined-text-field>
+      <md-outlined-text-field data-f="port" label="端口" type="number" value="${i.port||16390}" helper="${(i.tlsOn||(name&&name!=='default'))?'启用 HTTPS 的实例仅经主端口访问，此端口仅作标识':'监听端口（启用 HTTPS 后仅提供 https）'}"></md-outlined-text-field>
+      <md-outlined-text-field data-f="webToken" label="访问令牌" type="password" value="" helper="留空保存表示清除访问令牌"></md-outlined-text-field>
       <label style="display:flex;align-items:center;gap:4px;font-size:11px"><md-switch data-f="tls" ${i.tlsOn?'selected':''}></md-switch>启用 HTTPS</label>
       ${(name&&name!=='default'&&name!==Store.currentName)?`<md-text-button data-action="delInstance" data-name="${escAttr(name)}" style="color:var(--md-sys-color-error);align-self:flex-start;margin-top:2px">删除实例</md-text-button>`:''}
     </div>`, {onOk:()=>savePortSettings(name)});
@@ -1812,7 +1812,7 @@ async function savePortSettings(editName){
   const port=Number(v.port);
   const adminKey=String(v.webToken||'').trim();
   const tlsOn=!!($('#dlgBody [data-f=tls]')&&$('#dlgBody [data-f=tls]').selected);
-  if(!/^[A-Za-z0-9_-]{1,32}$/.test(name)){ snack('实例名只能含字母/数字/中划线/下划线(最长32字符)',true); return false; }
+  if(!/^[A-Za-z0-9_-]{1,32}$/.test(name)){ snack('实例名仅可包含字母、数字、中划线、下划线（最长 32 字符）',true); return false; }
   if(!port||port<1024||port>65535){ snack('HTTP 端口范围 1024-65535',true); return false; }
   try{
 if(editName){ // ---- edit an existing instance ----
@@ -1820,7 +1820,7 @@ if(editName){ // ---- edit an existing instance ----
 if(name!==editName){ // ---- rename: call the rename API first (hot), later saves use the new name ----
         await adapter.renameInstance(editName,name);
         effName=name;
-        snack('实例已改名: '+editName+' → '+name);
+        snack('实例已改名： '+editName+' → '+name);
       }
       const cur=await adapter.getConfig(effName);
       const patch={ port, host:(cur&&cur.host)||'0.0.0.0',
@@ -1831,7 +1831,7 @@ if(name!==editName){ // ---- rename: call the rename API first (hot), later save
       await adapter.saveConfig(effName,patch);
       snack('已保存实例 '+effName);
       if(editName===Store.currentName&&cur&&cur.port&&Number(cur.port)!==port)
-        snack('面板实例端口已改为 '+port+', 稍后请用新地址访问面板',true);
+        snack('面板实例端口已改为 '+port+'，稍后请使用新地址访问面板',true);
       let running=false;
       try{ const d=await adapter.getInstances(); running=!!(d.instances||[]).find(x=>x.name===effName&&x.running); }catch(_){}
       if(running) doInstanceAction(effName,'restart'); else renderPorts();
@@ -1847,11 +1847,11 @@ if(tlsOn){ // reuse an existing instance's certificate (certs can be shared acro
               if(c&&c.tls&&c.tls.cert&&c.tls.key){ tls.cert=c.tls.cert; tls.key=c.tls.key; break; }
             }catch(_){}
           }
-          if(!tls.cert){ tls.enable=false; snack('没有找到可用证书, 已按纯 HTTP 创建',true); }
+          if(!tls.cert){ tls.enable=false; snack('未找到可用证书，已按纯 HTTP 创建',true); }
         }catch(_){ tls.enable=false; }
       }
       await adapter.createInstance(name,{ port, host:'0.0.0.0', tls, webToken:adminKey });
-      snack('实例 '+name+' 已创建, 正在启动…');
+      snack('实例 '+name+' 已创建，正在启动…');
       try{ await adapter.action(name,'start'); }catch(_){}
       renderPorts();
     }
@@ -1864,14 +1864,14 @@ function openProxyDialog(name){
   const p=(cur&&cur.proxies&&cur.proxies[name])||{};
   openDialog(name?'编辑代理 '+name:'添加代理', `
     <div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
-      <md-outlined-text-field data-f="name" label="名称" value="${escAttr(name||'')}" ${name?'disabled':''} required helper="渠道里用这个名字引用"></md-outlined-text-field>
+      <md-outlined-text-field data-f="name" label="名称" value="${escAttr(name||'')}" ${name?'disabled':''} required helper="在渠道中以此名称引用"></md-outlined-text-field>
       <md-outlined-select data-f="type" label="类型" style="width:100%">
         ${['socks5','http'].map(t=>`<md-select-option value="${t}" ${t===(p.type||'socks5')?'selected':''}>${t}</md-select-option>`).join('')}
       </md-outlined-select>
       <md-outlined-text-field data-f="host" label="服务器地址" value="${escAttr(p.host||'127.0.0.1')}" required></md-outlined-text-field>
       <md-outlined-text-field data-f="port" label="端口" type="number" value="${p.port||7890}"></md-outlined-text-field>
-      <md-outlined-text-field data-f="username" label="用户名(可选)" value="${escAttr(p.username||'')}"></md-outlined-text-field>
-      <md-outlined-text-field data-f="password" label="密码(可选)" type="password" value="${escAttr(p.password||'')}"></md-outlined-text-field>
+      <md-outlined-text-field data-f="username" label="用户名（可选）" value="${escAttr(p.username||'')}"></md-outlined-text-field>
+      <md-outlined-text-field data-f="password" label="密码（可选）" type="password" value="${escAttr(p.password||'')}"></md-outlined-text-field>
     </div>`, {onOk:()=>saveProxy(name)});
   const s=$('#dlgBody [data-f=type]');
   if(s) s.updateComplete.then(()=>Promise.all([...s.querySelectorAll('md-select-option')].map(o=>o.updateComplete||0))).then(()=>s.value=p.type||'socks5').catch(()=>{});
@@ -1882,7 +1882,7 @@ async function saveProxy(origName){
   const host=String(v.host||'').trim();
   const port=Number(v.port);
   if(!name){ snack('名称必填',true); return false; }
-  if(!/^[A-Za-z0-9_-]{1,32}$/.test(name)){ snack('代理名只能含字母/数字/中划线/下划线',true); return false; }
+  if(!/^[A-Za-z0-9_-]{1,32}$/.test(name)){ snack('代理名仅可包含字母、数字、中划线、下划线',true); return false; }
   if(!host){ snack('服务器地址必填',true); return false; }
   if(!port||port<1||port>65535){ snack('端口范围 1-65535',true); return false; }
   try{
@@ -1908,8 +1908,8 @@ async function delProxy(name){
     const cur=await adapter.getConfig(Store.inst);
     const used=(cur.channels||[]).filter(c=>c.proxy===name).map(c=>c.name);
     const msg=used.length
-      ? `确定删除代理 ${name}? 渠道 ${used.join(', ')} 正在引用它, 删除后这些渠道的代理会失效!`
-      : `确定删除代理 ${name}?`;
+      ? `确定删除代理 ${name}？渠道 ${used.join(', ')} 正在引用该代理，删除后相关渠道的代理将失效！`
+      : `确定删除代理 ${name}？`;
     if(!confirm(msg)) return;
     const proxies=Object.assign({},(cur&&cur.proxies)||{});
     delete proxies[name];
@@ -1942,14 +1942,14 @@ if(delayMs) ch.delayMs=delayMs; // 0 = omit, clearing the old value
 const ovText=String(v.paramOverride||'').trim();
 if(ovText){
   let ov;
-  try{ ov=JSON.parse(ovText); }catch(e){ snack('参数覆写 JSON 有误: '+e.message,true); return false; }
+  try{ ov=JSON.parse(ovText); }catch(e){ snack('参数覆写 JSON 有误： '+e.message,true); return false; }
   if(!ov||typeof ov!=='object'||Array.isArray(ov)||!Object.keys(ov).length){ snack('参数覆写需为非空 JSON 对象',true); return false; }
   ch.paramOverride=ov;
 }else if(providerDlgOrigParamOverride!==undefined) ch.paramOverride='';
 if(providerDlgOrigName && providerDlgOrigName!==ch.name) ch.oldName=providerDlgOrigName; // rename
 if(Object.keys(modelMap).length) ch.modelMap=modelMap; // never send an arrow-less empty map, so an existing one is not wiped
   try{ await adapter.saveChannel(Store.inst,ch);
-    snack('已保存渠道 '+ch.name+(Object.keys(modelMap).length?' (改名映射重启实例后生效)':''));
+    snack('已保存渠道 '+ch.name+(Object.keys(modelMap).length?' （改名映射重启实例后生效）':''));
     await renderProviders(); }
   catch(e){ snack(e.message,true); return false; }
   return true;
@@ -1965,7 +1965,7 @@ async function saveRouting(){
   const ovText=String($('#rt-paramOverride').value||'').trim();
   let paramOverride=null;
   if(ovText){
-    try{ paramOverride=JSON.parse(ovText); }catch(e){ snack('参数覆写 JSON 有误: '+e.message,true); return; }
+    try{ paramOverride=JSON.parse(ovText); }catch(e){ snack('参数覆写 JSON 有误： '+e.message,true); return; }
     if(!paramOverride||typeof paramOverride!=='object'||Array.isArray(paramOverride)){ snack('参数覆写需为 JSON 对象',true); return; }
   }
   try{
@@ -1974,11 +1974,11 @@ async function saveRouting(){
       redact:{enable:!!$('#rt-redact').selected, response:!!$('#rt-redactRes').selected, extra:rtExtra.slice()},
       modelSync:{enable:!!$('#rt-modelSync').selected, intervalHours:+$('#rt-syncInterval').value||24},
       paramOverride});
-    snack('已保存 (热重载生效)'); await renderRouting();
+    snack('已保存（热重载生效）'); await renderRouting();
   }catch(e){ snack(e.message,true); }
 }
 async function doInstanceAction(name,cmd){
-  if(cmd==='stop'&&name===Store.currentName){ snack('不能停止承载面板的实例',true); return; }
+  if(cmd==='stop'&&name===Store.currentName){ snack('无法停止承载面板的实例',true); return; }
   try{
     await adapter.action(name,cmd); snack(`${name} ${cmd} 指令已发送`);
     if(cmd==='restart'){ let n=0; const ping=setInterval(async()=>{ n++;
@@ -1991,7 +1991,7 @@ async function doInstanceAction(name,cmd){
 // Delete instance (button in the edit dialog): after confirmation, stops + removes config; irreversible
 async function delInstance(name){
   if(!name||name==='default'||name===Store.currentName) return;
-  if(!confirm('确定删除实例 '+name+' ? 将停止它并删除其配置文件, 不可恢复!')) return;
+  if(!confirm('确定删除实例 '+name+' ？将停止该实例并删除其配置文件，不可恢复！')) return;
   try{
     await adapter.deleteInstance(name);
     closeDlg();
@@ -2010,7 +2010,7 @@ function fmtLeft(ms){
   return Math.ceil(d/86400)+' 天后';
 }
 function ssRows(list, kind){
-  if(!list.length) return '<tr><td colspan="3" class="empty">'+(kind==='pend'?'登录链接不保存在面板中':'没有有效会话')+'</td></tr>';
+  if(!list.length) return '<tr><td colspan="3" class="empty">'+(kind==='pend'?'登录链接不保存在面板中':'当前无有效会话')+'</td></tr>';
   return list.map(s=>`<tr>
     <td class="mono truncate" title="${escAttr(s.sid)}">${esc(String(s.sid).slice(0,10))}…</td>
     <td class="small">${esc(fmtDateTime(s.exp))}<span class="muted"> · ${esc(fmtLeft(s.exp))}</span></td>
@@ -2023,13 +2023,13 @@ async function renderSession(){
     $('#ss-table tbody').innerHTML=ssRows(d.sessions||[], 'sess');
     $('#ss-pend tbody').innerHTML=ssRows(d.pending||[], 'pend');
     const at=Number(d.adminExpireAt)||0;
-    $('#ss-expire-state').textContent=at?('已设定: '+fmtDateTime(at)+' ('+fmtLeft(at)+')'):'未设定';
+    $('#ss-expire-state').textContent=at?('已设定： '+fmtDateTime(at)+'（'+fmtLeft(at)+'）'):'未设定';
     const inp=$('#ss-expire-at');
     if(inp) inp.value=at?new Date(at-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16):'';
   }catch(e){ if(e.name!=='AbortError') snack(e.message,true); }
 }
 async function revokeSession(sid){
-  const msg=sid?'确定注销这个会话? 对应浏览器需要重新用登录链接进入。':'确定注销全部会话? 包括当前这个浏览器, 之后要重新 agw web login。';
+  const msg=sid?'确定注销该会话？对应浏览器需重新使用登录链接进入。':'确定注销全部会话？包括当前浏览器，之后需重新执行 agw web login。';
   if(!confirm(msg)) return;
   try{
     await adapter.revokeWebSession(sid);
@@ -2040,10 +2040,10 @@ async function revokeSession(sid){
 }
 async function setAdminExpire(){
   const v=$('#ss-expire-at')?.value;
-  if(!v){ snack('先选一个时间',true); return; }
+  if(!v){ snack('请先选择时间',true); return; }
   const at=new Date(v).getTime();
   if(!(at>0)){ snack('时间无效',true); return; }
-  try{ await adapter.setAdminExpire(at); snack('已设定定时注销: '+fmtDateTime(at)); renderSession(); }
+  try{ await adapter.setAdminExpire(at); snack('已设定定时注销： '+fmtDateTime(at)); renderSession(); }
   catch(e){ snack(e.message,true); }
 }
 async function clearAdminExpire(){
@@ -2102,7 +2102,7 @@ function drawDailyChart(days, mode, id){
   const prim=cssVar('--md-sys-color-primary','#D0BCFF'), tert=cssVar('--md-sys-color-tertiary','#EFB8C8');
   const grid=cssVar('--md-sys-color-outline-variant','#444');
   const padL=42, padR=10, padT=20, padB=24, iw=Math.max(24,w-padL-padR), ih=h-padT-padB;
-  if(!days||!days.length){ chartFont(cx,11); cx.fillStyle=onSurf; cx.fillText('暂无数据 (需有请求流过)', padL, h/2); return; }
+  if(!days||!days.length){ chartFont(cx,11); cx.fillStyle=onSurf; cx.fillText('暂无数据（需有请求经过）', padL, h/2); return; }
   const max=Math.max(1,...days.map(d=>Math.max(d.in||0,d.out||0)));
   cx.strokeStyle=grid; cx.lineWidth=1;
   chartFont(cx,10);
@@ -2151,13 +2151,13 @@ function drawDailyChart(days, mode, id){
 // ---- 按模型用量: bars / pie ----
 function drawModelChart(rows, mode, id){
   if(mode==='pie') return drawPieChart(id, rows, {maxSlices:6});
-  return drawVBars(id, rows, '暂无数据 (需有请求流过)');
+  return drawVBars(id, rows, '暂无数据（需有请求经过）');
 }
 
 // ---- Token 用途分布: horizontal bars / pie ----
 function drawDistChart(rows, mode, id){
   if(mode==='pie') return drawPieChart(id, rows, {maxSlices:7});
-  return drawHBars(id, rows, '暂无分布数据 (需有请求流过)');
+  return drawHBars(id, rows, '暂无分布数据（需有请求经过）');
 }
 
 function drawVBars(id, rows, emptyText){
@@ -2218,7 +2218,7 @@ function drawPieChart(id, rows, {maxSlices=6}={}){
   const onSurfMain=cssVar('--md-sys-color-on-surface','#E6E1E5');
   const surf=cssVar('--md-sys-color-surface-container','#211F26');
   const list=(rows||[]).filter(r=>(r.value||0)>0);
-  if(!list.length){ chartFont(cx,11); cx.fillStyle=onSurf; cx.fillText('暂无数据 (需有请求流过)',12,h/2); return; }
+  if(!list.length){ chartFont(cx,11); cx.fillStyle=onSurf; cx.fillText('暂无数据（需有请求经过）',12,h/2); return; }
   const items=list.slice(0,maxSlices).map(r=>({name:r.name,value:r.value}));
   const rest=list.slice(maxSlices).reduce((t,r)=>t+r.value,0);
   if(rest>0) items.push({name:'其他',value:rest});
@@ -2276,7 +2276,7 @@ document.body.addEventListener('click', e=>{
     const a=act.dataset.action, n=act.dataset.name;
     if(a==='editProvider'){ const cfg=Store.configs.get(Store.inst); openProviderDialog(cfg?.channels?.find(c=>c.name===n)); }
     else if(a==='setDefaultProvider'){ setDefaultChannel(n); }
-    else if(a==='deleteProvider'){ if(confirm(`删除渠道 ${n}?`)) adapter.deleteChannel(Store.inst,n).then(renderProviders).catch(x=>snack(x.message,true)); }
+    else if(a==='deleteProvider'){ if(confirm(`删除渠道 ${n}？`)) adapter.deleteChannel(Store.inst,n).then(renderProviders).catch(x=>snack(x.message,true)); }
     else if(a==='openPortDialog') openPortDialog(n);
     else if(a==='delInstance') delInstance(n);
     else if(a==='copyKey'||a==='toggleKey'||a==='delKey'||a==='rechargeKey') cardAction(a,act.dataset.key,act.dataset.name,act.dataset.on==='1');
@@ -2287,7 +2287,7 @@ document.body.addEventListener('click', e=>{
     else if(a==='cwDel') cwDel(+act.dataset.i);
     else if(a==='anView'){ openAnnounceView(anItems.find(x=>x.id===n)); }
     else if(a==='anEdit'){ openAnnounceDialog(anItems.find(x=>x.id===n)); }
-    else if(a==='anDel'){ if(confirm('删除该公告?')) adapter.deleteAnnouncement(n).then(renderAnnounce).catch(x=>snack(x.message,true)); }
+    else if(a==='anDel'){ if(confirm('删除该公告？')) adapter.deleteAnnouncement(n).then(renderAnnounce).catch(x=>snack(x.message,true)); }
     else if(a==='revokeSession') revokeSession(act.dataset.sid||'');
     return;
   }
@@ -2324,13 +2324,13 @@ $('#px-add').addEventListener('click',()=>openProxyDialog());
   $('#rp-'+dir+'-chips').addEventListener('click',e=>{ const x=e.target.closest('.mm-x'); if(x) rpDel(dir,+x.dataset.i); });
 });
 const rpTestOut=$('#rp-test-out-btn'), rpTestInc=$('#rp-test-inc-btn');
-if(rpTestOut) rpTestOut.addEventListener('click',()=>{ const rules=rpCompileCli(rpLists.out); const r=rpApplyCli($('#rp-test-in')?$('#rp-test-in').value:'',rules); $('#rp-test-result').textContent = r===''?'(空)':r; });
-if(rpTestInc) rpTestInc.addEventListener('click',()=>{ const rules=rpCompileCli(rpLists.inc); const r=rpApplyCli($('#rp-test-in')?$('#rp-test-in').value:'',rules); $('#rp-test-result').textContent = r===''?'(空)':r; });
+if(rpTestOut) rpTestOut.addEventListener('click',()=>{ const rules=rpCompileCli(rpLists.out); const r=rpApplyCli($('#rp-test-in')?$('#rp-test-in').value:'',rules); $('#rp-test-result').textContent = r===''?'（空）':r; });
+if(rpTestInc) rpTestInc.addEventListener('click',()=>{ const rules=rpCompileCli(rpLists.inc); const r=rpApplyCli($('#rp-test-in')?$('#rp-test-in').value:'',rules); $('#rp-test-result').textContent = r===''?'（空）':r; });
   $('#pt-new').addEventListener('click',()=>openPortDialog());
   $('#cd-new').addEventListener('click',()=>openCardDialog());
   // second factor
   $('#ka-save-second').addEventListener('click',async()=>{ try{ await adapter.setAdminAuth(Store.inst,{secondKey:$('#ka-secondKey').value}); snack('第二密码已保存'); loadAdminAuth(Store.inst); }catch(e){ snack(e.message,true); } });
-  $('#ka-totp-enable').addEventListener('click',async()=>{ try{ const r=await adapter.setAdminAuth(Store.inst,{totpAction:'enable'}); if(r.totpSecret){ $('#ka-totp-info').style.display=''; $('#ka-totp-secret').textContent=r.totpSecret; $('#ka-totp-url').textContent=r.otpauthUrl||''; } snack('TOTP 已启用, 请立即扫码保存密钥!'); loadAdminAuth(Store.inst); }catch(e){ snack(e.message,true); } });
+  $('#ka-totp-enable').addEventListener('click',async()=>{ try{ const r=await adapter.setAdminAuth(Store.inst,{totpAction:'enable'}); if(r.totpSecret){ $('#ka-totp-info').style.display=''; $('#ka-totp-secret').textContent=r.totpSecret; $('#ka-totp-url').textContent=r.otpauthUrl||''; } snack('TOTP 已启用，请立即扫码并保存密钥！'); loadAdminAuth(Store.inst); }catch(e){ snack(e.message,true); } });
   $('#ka-totp-disable').addEventListener('click',async()=>{ try{ await adapter.setAdminAuth(Store.inst,{totpAction:'disable'}); snack('TOTP 已停用'); loadAdminAuth(Store.inst); }catch(e){ snack(e.message,true); } });
   $('#rg-save').addEventListener('click',saveCardSettings);
 // Tunnel
@@ -2347,7 +2347,7 @@ if($('#rt-extra-chips')) $('#rt-extra-chips').addEventListener('click',e=>{
 $('#rt-syncNow').addEventListener('click', async ()=>{
   const btn=$('#rt-syncNow'); btn.disabled=true; const old='立即同步'; btn.textContent='同步中…';
   try{ const r=await adapter.syncModels(Store.inst);
-    snack('已同步: '+r.added+' 个新模型'+(r.fails?', '+r.fails+' 失败':''));
+    snack('已同步： '+r.added+' 个新模型'+(r.fails?', '+r.fails+' 失败':''));
     await renderRouting();
   }catch(e){ snack(e.message,true); }
   btn.disabled=false; btn.textContent=old;
@@ -2373,7 +2373,7 @@ window.addEventListener('offline',()=>{ Store.online=false; snack('网络已断�
 
 // ============ Boot ============
 if(!MW_OK){
-  $('#compatBar').textContent='⚠ Material Web 组件库 (vendor/mw-v2.js) 加载失败，页面将只有无样式内容。请确认文件已部署。';
+  $('#compatBar').textContent='⚠ Material Web 组件库（vendor/mw-v2.js）加载失败，页面将仅显示无样式内容。请确认文件已部署。';
   $('#compatBar').classList.add('show');
 }
 $('#keyBtn').addEventListener('click',openKeyDialog);
@@ -2445,7 +2445,7 @@ function bgSyncPreview(){
   const st=bgLoad();
   const img=bgCleared?null:(bgDraft||st.img||null);
   if(box) box.style.backgroundImage=img?`url(${img})`:'';
-  if(hint) hint.textContent=bgDraft?`新图片已就绪 (${Math.round(bgDraft.length/1024)}KB), 点「应用」生效`:(img?'当前图片已设置':'未上传图片');
+  if(hint) hint.textContent=bgDraft?`新图片已就绪（${Math.round(bgDraft.length/1024)}KB），点击「应用」生效`:(img?'当前图片已设置':'未上传图片');
   if(clr) clr.style.display=img?'':'none';
 }
 function openBgDialog(){
@@ -2466,7 +2466,7 @@ function openBgDialog(){
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <md-text-button id="bgClear">移除图片</md-text-button>
-      <span style="font-size:9px;color:var(--md-sys-color-on-surface-variant)">图片仅保存在本设备浏览器中, 不会上传到网关</span>
+      <span style="font-size:9px;color:var(--md-sys-color-on-surface-variant)">图片仅保存在本设备浏览器中，不会上传至网关</span>
     </div>
   </div>`, {okText:'应用', onOk:()=>{
     const m=String(dlgValue().bgmode||'none');
@@ -2476,7 +2476,7 @@ function openBgDialog(){
     const next=Object.assign({},cur,{mode:m});
     if(img) next.img=img; else delete next.img;
     try{ localStorage.setItem(BG_KEY,JSON.stringify(next)); }
-    catch(e){ snack('保存失败: 浏览器存储空间不足, 请换一张更小的图片',true); return false; }
+    catch(e){ snack('保存失败：浏览器存储空间不足，请更换更小的图片',true); return false; }
     applyBg(); snack('背景已更新'); return true;
   }});
   bgSyncPreview();
@@ -2544,7 +2544,7 @@ function brandEncode(img,max){
 }
 async function brandPrepareLogo(file){
   if(/svg/i.test(file.type)||/\.svg$/i.test(file.name||'')){
-    if(file.size>200*1024) throw new Error('SVG 过大, 上限 200KB');
+    if(file.size>200*1024) throw new Error('SVG 过大，上限 200KB');
     const raw=await bgReadFile(file);
     return 'data:image/svg+xml;base64,'+raw.slice(raw.indexOf(',')+1);
   }
@@ -2558,7 +2558,7 @@ function brandSyncLogo(){
   const logo=brandLogoSrc();
   if(pv){ if(logo){ pv.src=logo; pv.hidden=false; } else { pv.hidden=true; pv.removeAttribute('src'); } }
   if(ph) ph.style.display=logo?'none':'';
-  if(hint) hint.textContent=brandDraft?`新 Logo 已就绪 (${Math.round(brandDraft.length/1024)}KB), 点「保存」生效`
+  if(hint) hint.textContent=brandDraft?`新 Logo 已就绪（${Math.round(brandDraft.length/1024)}KB），点击「保存」生效`
     :(logo?'当前 Logo 已设置':'支持 SVG / PNG / JPG / WebP / GIF · 仅保存在本设备');
   if(clr) clr.style.display=logo?'':'none';
 }
@@ -2578,13 +2578,13 @@ function openBrandDialog(){
     </div>
     <md-text-button id="brandLogoClear" style="align-self:flex-start">移除 Logo</md-text-button>
     <md-outlined-text-field data-f="bname" label="名称" value="${escAttr(brandState.name)}"></md-outlined-text-field>
-    <md-outlined-text-field data-f="bver" label="副标题(留空隐藏)" value="${escAttr(brandState.ver)}"></md-outlined-text-field>
+    <md-outlined-text-field data-f="bver" label="副标题（留空隐藏）" value="${escAttr(brandState.ver)}"></md-outlined-text-field>
   </div>`, {okText:'保存', onOk:()=>{
     const v=dlgValue();
     const name=String(v.bname||'').trim()||'OpenAGW', ver=String(v.bver||'').trim();
     const logo=brandLogoSrc()||'';
     try{ localStorage.setItem('agw-brand',JSON.stringify({name,ver,logo})); }
-    catch(e){ snack('保存失败: 浏览器存储空间不足, 请换一个更小的 Logo',true); return false; }
+    catch(e){ snack('保存失败：浏览器存储空间不足，请更换更小的 Logo',true); return false; }
     applyBrand({name,ver,logo});
     snack('品牌已更新');
     return true;
