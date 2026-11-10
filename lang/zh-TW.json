@@ -168,7 +168,7 @@
  "%s 未开请求记录(record), 无历史数据可统计": "%s has no request record; no history to aggregate",
  "%s %s (来自 requests-*.jsonl):": "%s %s (from requests-*.jsonl):",
  "%s %s次 错误%s %s tok 均时 %s": "%s  %s reqs  err %s  %s tok  avg %s",
- "agw — ai-gateway 统一 CLI (计划通规范) []=可选 <>=值": "agw — ai-gateway unified CLI (计划通 spec)   []=optional <>=value",
+ "agw — OpenAGW 统一 CLI []=可选 <>=值": "agw — OpenAGW unified CLI   []=optional <>=value",
  "实例": "Instances",
  "agw inst list 列出全部实例": "agw inst list                                 List all instances",
  "agw inst <inst> [start|stop] 启动/停止/看状态": "agw inst <inst> [start|stop]                  Start/stop/show status",
@@ -301,6 +301,6 @@
  "管理端资料": "Admin profile",
  "隧道管理 loop 命令:": "Tunnel loop commands:",
  "面板": "Panel",
- "agw — ai-gateway 统一 CLI (计划通规范)    []=可选  <>=值": "agw — ai-gateway unified CLI    []=optional  <>=value",
- "agw — ai-gateway 统一 CLI (计划通规范)": "agw — ai-gateway unified CLI"
+ "agw — OpenAGW 统一 CLI    []=可选  <>=值": "agw — OpenAGW unified CLI    []=optional  <>=value",
+ "agw — OpenAGW 统一 CLI": "agw — OpenAGW unified CLI"
 }

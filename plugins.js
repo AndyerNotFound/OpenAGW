@@ -4,7 +4,7 @@
  *
  * Responsibilities: scan installed plugins / activate each instance's server.js /
  * dispatch /plugins/<id>/* / per-instance data / capabilities / admin-SDUI pages /
- * intent signatures (Gay Core §3) / theme tokens.
+ * intent signatures (OpenAGW client §3) / theme tokens.
  *
  * Isolation: plugin code is shared (plugins/<id>/), data and config are per instance
  * (data/plugins-data/<inst>/<id>.json, .gc-security.json).
@@ -593,7 +593,7 @@ class PluginManager {
       .map(p => ({ id: p.id, name: p.name, icon: p.icon, description: p.description, userPage: p.userPage }));
   }
 
-  /** bootstrap.plugins[] — shape matches Gay Core's PluginInfo (all fields optional on the client). */
+  /** bootstrap.plugins[] — shape matches the OpenAGW client's PluginInfo (all fields optional on the client). */
   bootstrapPlugins(instName, cfg) {
     const enabled = new Set((Array.isArray(cfg.plugins) ? cfg.plugins : []).filter(p => p && p.enable && p.id).map(p => p.id));
     const caps = this.listCapabilities(instName);

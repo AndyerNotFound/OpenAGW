@@ -1,12 +1,12 @@
 'use strict';
 /**
- * GET /api/app/bootstrap — the native client's entry point (Gay Core §2).
+ * GET /api/app/bootstrap — the OpenAGW client's entry point.
  *
  * The App is a renderer with no business state: everything it shows on first
  * contact comes from here — site profile, layout, auth capabilities, plugin
  * disclosure (sha256 + permissions), SDUI page registry, runtime capabilities.
  *
- * Field names mirror gay-core's Bootstrap / PluginInfo / ThemeInfo data classes;
+ * Field names mirror the OpenAGW client's Bootstrap / PluginInfo / ThemeInfo data classes;
  * the client treats every field as optional, so partial data degrades instead of
  * crashing. This server is single-tenant: uid is always 1 and there are no
  * accounts, so `auth.user` stays false and `userDebug` stays null.

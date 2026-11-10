@@ -2,7 +2,7 @@
 /**
  * Intent signature guard — OpenAGW plugin protocol v2
  *
- * Contract (identical to Gay Core §3 / ai-gateway-core src/plugins.js:753):
+ * Contract (OpenAGW client §3; identical to ai-gateway-core src/plugins.js:753):
  *   X-GC-Sign = HMAC_SHA256(token,
  *     ts \n nonce \n seq \n intentId \n METHOD \n pathname \n sha256(rawBody))
  *
@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const permissions = require('./permissions');
 
 const WINDOW_MS = 5 * 60 * 1000;   // ±5 minutes
 const NONCE_KEEP = 200;            // keep the newest N nonces per key
@@ -125,9 +126,9 @@ class IntentGuard {
       return { ok: false, status: 401, error: '本实例未配置卡密, 意图接口不可用' };
     }
 
-    /* a card limited to certain branches must not replay its intent on another instance */
-    if (keyRecord && Array.isArray(keyRecord.branches) && keyRecord.branches.length && !keyRecord.branches.includes(this.inst)) {
-      return { ok: false, status: 403, error: '此卡密不允许访问分组: ' + this.inst };
+    /* a card limited to certain instances must not replay its intent on another one */
+    if (keyRecord && !permissions.allowsBranch(keyRecord, this.inst)) {
+      return { ok: false, status: 403, error: '此卡密未授权访问实例: ' + this.inst + ' (实例权限: ' + (permissions.list(keyRecord.branches).join(', ') || '仅发卡实例') + ')' };
     }
 
     /* idempotency: only a properly signed duplicate gets the cached response */

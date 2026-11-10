@@ -1,6 +1,6 @@
 # OpenAGW 插件协议 v2
 
-> 参考实现：`ai-gateway-core/src/plugins.js`（Gay Core 客户端的原生后端）。
+> 参考实现：`ai-gateway-core/src/plugins.js`（OpenAGW client 的原生后端）。
 > 本协议只搬"插件内核 + 原生客户端入口"，不搬业务插件与用户体系。
 > 状态：内核、意图验签、bootstrap 已落地（`plugins.js` / `plugin-security.js` / `bootstrap.js`）；
 > 管理端 API 与 `/admin/ui/<page>` 路由尚未落地，见文末「未完成」。
@@ -68,13 +68,13 @@
 - 配置：实例 `config*.json` 的 `plugins[]`，每项 `{id, enable, version, config}`。
 - 卸载：`keepData=false` 时连数据一起删。
 
-## 5. 意图签名（Gay Core §3）
+## 5. 意图签名（OpenAGW client §3）
 
 ```
 X-GC-Sign = HMAC_SHA256(token, ts \n nonce \n seq \n intentId \n METHOD \n pathname \n sha256(rawBody))
 ```
 
-校验顺序：凭据 → 头齐全 → ±5 分钟时间窗 → 插件归属（`pathname` 必须含 `/plugins/<id>/`）→ 序列号不回滚 → nonce 不重复 → 验签 → **立即消耗 seq+nonce** → 卡密有效（含 `branches` 白名单）→ 幂等命中回缓存。
+校验顺序：凭据 → 头齐全 → ±5 分钟时间窗 → 插件归属（`pathname` 必须含 `/plugins/<id>/`）→ 序列号不回滚 → nonce 不重复 → 验签 → **立即消耗 seq+nonce** → 卡密有效（含 `branches` 实例白名单; 为空 = 仅发卡实例）→ 幂等命中回缓存。
 
 - **消耗时机**：HMAC 通过即落盘 seq/nonce。处理器提前返回（业务 400）也不会让同一份签名再次通过；伪造签名不推高 lastSeq。
 - **幂等在验签之后**：靠猜测 intentId 拿不到缓存响应。
@@ -114,7 +114,7 @@ ctx.registerRoute('POST', '/checkin', async (req, res, params) => {
 
 ## 8. 原生客户端入口
 
-`GET /api/app/bootstrap` 返回（字段与 gay-core `Bootstrap` 对齐，全部可缺省）：
+`GET /api/app/bootstrap` 返回（字段与 OpenAGW client `Bootstrap` 对齐，全部可缺省）：
 
 ```
 {ok, core, appApi, branch, uid, serverInfo, userDebug, layout, branches,
@@ -143,10 +143,12 @@ ctx.registerRoute('POST', '/checkin', async (req, res, params) => {
 
 | 角色 | 聊天 /v1/* | 插件用户端 | 管理 API | 面板 |
 |---|---|---|---|---|
-| `user` | ✓ 受 `quotaTokens`/`expiresAt`/`models`/`channels` 约束 | ✓ | ✗ 401 | ✗ |
-| `admin` | ✗ 403 "管理员密钥不能用于 API 访问" | ✗ | ✓ Bearer / x-agw-token / ?key= 均可 | ✗（专属面板会话） |
+| `user` | ✓ 受 `quotaTokens`/`expiresAt`/`rpm`/`tpm`/`models`/`channels`/`branches` 约束 | ✓ | ✗ 401 | ✗ |
+| `admin` | ✗ 403 "管理员密钥不能用于 API 访问" | ✗ | ✓ Bearer / x-agw-token / ?key= 均可 | ✓ 登录页填入卡密 + 二次验证(若已开启) |
 
 - **管理层不能用用户 key 进管理面**：`checkAdminAuth` 只认 `role="admin"` 的 `apiKeys`，不认 user key。
+- **面板入口**：`/<sid>/admin/<token>`（`agw web login` 打印）。一次性链接只负责打开登录页，登录页要求管理员卡密；实例有卡密或二次验证时，会话必须经过登录页（`login:true`），旧式/待登录会话访问面板与管理 API 一律 401。无 Cookie/Token 访问管理端点 401，sid/token 不匹配 404。
 - **管理员 key 不能聊天**：`checkAuth` 看到 `role="admin"` 返回 403，即使 `quotaTokens` 设为 0 也不能绕过。
-- **发卡与改权**：`POST /admin/api/keys/:inst` 接受 `role`，`POST /admin/api/keys-update/:inst` 可改。
+- **发卡与改权**：`POST /admin/api/keys/:inst` 接受 `role`、`rpm`、`tpm`、`models`、`channels`、`branches`；`POST /admin/api/keys-update/:inst` 可改，`resetRate: true` 清空限流窗口。
+- **跨实例**：卡密归属发卡实例；`branches` 为空时只能用于发卡实例，列出的其他实例需显式授权。额度、用量与限流窗口都记在发卡实例上。
 - **单实例同步**：`hotReload()` 在单实例模式会自动把磁盘上的 `apiKeys` 同步到内存，新密钥立即生效。
