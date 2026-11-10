@@ -2,165 +2,153 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#141218">
+<meta name="description" content="OpenAGW 用户端 · Material Web 版">
+<meta http-equiv="Cache-Control" content="no-cache,no-store,must-revalidate">
 <title>OpenAGW 用户端</title>
-<style>
-:root{color-scheme:dark;--bg:#141218;--card:#1d1b20;--line:#2b2830;--txt:#e6e0e9;--dim:#a79fb0;--pri:#d0bcff;--err:#f2b8b5}
-*{box-sizing:border-box;margin:0}
-body{background:var(--bg);color:var(--txt);font:14px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:20px;max-width:640px;margin:0 auto}
-h1{font-size:18px;margin-bottom:4px}
-.sub{color:var(--dim);font-size:12px;margin-bottom:20px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:12px}
-label{display:block;font-size:12px;color:var(--dim);margin-bottom:4px}
-input{width:100%;background:#26232b;border:1px solid var(--line);border-radius:10px;color:var(--txt);padding:10px 12px;font:inherit;outline:none}
-input:focus{border-color:var(--pri)}
-button{background:var(--pri);color:#381e72;border:0;border-radius:999px;padding:10px 22px;font:inherit;font-weight:600;cursor:pointer;margin-top:10px}
-button.ghost{background:transparent;color:var(--pri);border:1px solid var(--line)}
-.row{display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px}
-.row:last-child{border-bottom:0}
-.k{color:var(--dim)}
-.v{text-align:right;word-break:break-all}
-.bar{height:6px;background:#26232b;border-radius:3px;overflow:hidden;margin-top:6px}
-.bar i{display:block;height:100%;background:var(--pri);border-radius:3px}
-.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-.chip{background:#26232b;border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:12px}
-.err{color:var(--err);font-size:12px;margin-top:8px;min-height:1em}
-.muted{color:var(--dim);font-size:12px}
-.head{display:flex;justify-content:space-between;align-items:center}
-select{background:#26232b;border:1px solid var(--line);border-radius:10px;color:var(--txt);padding:8px 10px;font:inherit}
-.hidden{display:none}
-</style>
+<link rel="stylesheet" href="/user/app.css">
 </head>
 <body>
-<h1>OpenAGW 用户端</h1>
-<div class="sub">使用卡密查看额度、有效期、限流与可用模型</div>
 
-<div class="card" id="loginCard">
-  <label for="keyInput">卡密</label>
-  <input id="keyInput" type="password" placeholder="sk-…" autocomplete="off">
-  <div class="err" id="loginErr"></div>
-  <button id="loginBtn">登录</button>
-</div>
+<div class="compat-bar" id="compatBar" role="alert"></div>
 
-<div id="app" class="hidden">
-  <div class="card">
-    <div class="head">
-      <div>
-        <div id="cardName" style="font-weight:600">-</div>
-        <div class="muted" id="cardRole">-</div>
-      </div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <select id="instSel" class="hidden"></select>
-        <button class="ghost" id="logoutBtn">退出</button>
-      </div>
+<!-- Background layer: aurora / uploaded image; behind all content -->
+<div id="bgLayer" aria-hidden="true"></div>
+
+<!-- ============ Sidebar: collapsed = icon rail, expanded = drawer + scrim ============ -->
+<aside class="rail" id="rail" data-open="false" aria-label="主导航">
+  <div class="rail-head">
+    <div class="rail-brand" title="OpenAGW 用户端">
+      <div class="rail-brand-txt"><div class="name">OpenAGW</div><div class="ver">用户端 · Material Web</div></div>
+    </div>
+    <button type="button" class="rail-toggle" id="railToggle" aria-label="展开侧边栏" aria-expanded="false" aria-controls="railList">
+      <span class="msym" id="railToggleIc">menu</span>
+    </button>
+  </div>
+  <div class="rail-ctl">
+    <div class="rail-acts">
+      <md-outlined-icon-button id="thBtn" aria-label="主题" title="主题"><md-icon>palette</md-icon></md-outlined-icon-button>
+      <md-outlined-icon-button id="bgBtn" aria-label="背景" title="背景"><md-icon>wallpaper</md-icon></md-outlined-icon-button>
+      <md-outlined-icon-button id="logoutBtn" aria-label="退出登录" title="退出登录"><md-icon>logout</md-icon></md-outlined-icon-button>
     </div>
   </div>
+  <nav class="rail-list" id="railList"></nav>
+</aside>
+<div class="rail-scrim" id="railScrim"></div>
 
-  <div class="card">
-    <div class="row"><span class="k">额度</span><span class="v" id="quota">-</span></div>
-    <div class="row"><span class="k">已用 / 剩余</span><span class="v" id="used">-</span></div>
-    <div class="bar"><i id="quotaBar" style="width:0%"></i></div>
-    <div class="row" style="margin-top:6px"><span class="k">有效期至</span><span class="v" id="expire">-</span></div>
-    <div class="row"><span class="k">限流（RPM / TPM）</span><span class="v" id="rate">-</span></div>
-  </div>
+<!-- ============ Main area ============ -->
+<div class="shell">
+  <header class="topbar">
+    <h1 id="pageTitle">首页</h1>
+    <md-icon-button id="refreshBtn" aria-label="刷新" title="刷新"><md-icon>refresh</md-icon></md-icon-button>
+  </header>
 
-  <div class="card">
-    <label>可访问实例</label>
-    <div class="chips" id="branches"></div>
-  </div>
+  <main class="main" id="main">
 
-  <div class="card">
-    <label>可用模型（当前实例）</label>
-    <div class="chips" id="models"></div>
-  </div>
+    <!-- ============ 首页 ============ -->
+    <section id="page-home" class="page">
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">卡密概览</div><div class="card-sub">当前卡密的额度、有效期与限流</div></div></div>
+        <div class="about">
+          <div class="about-txt">
+            <div class="about-name" id="ov-cardName">-</div>
+            <div class="about-ver" id="ov-cardRole">-</div>
+          </div>
+          <div class="about-lines" id="ov-cardLines"><div>正在加载…</div></div>
+        </div>
+        <div class="quota-track" style="margin-top:10px"><i id="ov-quotaBar"></i></div>
+        <div class="quota-meta"><span id="ov-quotaText">-</span><span id="ov-quotaPct">-</span></div>
+      </md-filled-card>
 
-  <div class="card">
-    <label>上游余额</label>
-    <div class="row"><span class="k">余额</span><span class="v" id="balance">-</span></div>
-    <div class="muted" id="balanceCh"></div>
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">可用模型</div><div class="card-sub" id="md-instNote">当前实例</div></div>
+          <md-outlined-select id="instSel" label="实例" style="width:132px"></md-outlined-select></div>
+        <div id="md-list" class="chips"><div class="empty">正在加载…</div></div>
+      </md-filled-card>
+    </section>
+
+    <!-- ============ 卡密管理 ============ -->
+    <section id="page-card" class="page hidden" hidden>
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">额度</div><div class="card-sub">总量与用量</div></div></div>
+        <div class="stat-row">
+          <div class="stat-box"><div class="num" id="cd-quota">-</div><div class="lbl">总额度</div></div>
+          <div class="stat-box"><div class="num" id="cd-used">-</div><div class="lbl">已用</div></div>
+          <div class="stat-box"><div class="num" id="cd-remain">-</div><div class="lbl">剩余</div></div>
+        </div>
+        <div class="quota-track"><i id="cd-quotaBar"></i></div>
+        <div class="quota-meta"><span id="cd-quotaText">-</span><span id="cd-quotaPct">-</span></div>
+      </md-filled-card>
+
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">有效期与限流</div><div class="card-sub">到期时间与每分钟限额</div></div></div>
+        <div class="opt-row"><span class="opt-txt"><span class="opt-name">有效期至</span></span><span id="cd-expire" class="small muted">-</span></div>
+        <div class="opt-row"><span class="opt-txt"><span class="opt-name">请求限流（RPM）</span></span><span id="cd-rpm" class="small">-</span></div>
+        <div class="opt-row"><span class="opt-txt"><span class="opt-name">Token 限流（TPM）</span></span><span id="cd-tpm" class="small">-</span></div>
+      </md-filled-card>
+
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">权限</div><div class="card-sub">可访问的实例、提供商与模型</div></div></div>
+        <div class="sub-title">可访问实例</div>
+        <div class="chips" id="cd-branches"></div>
+        <div class="sub-title" style="margin-top:8px">可用提供商</div>
+        <div class="chips" id="cd-channels"></div>
+        <div class="sub-title" style="margin-top:8px">可用模型（白名单）</div>
+        <div class="chips" id="cd-models"></div>
+      </md-filled-card>
+
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">上游余额</div><div class="card-sub">当前实例默认渠道的上游余额</div></div>
+          <md-text-button id="bal-refresh"><md-icon slot="icon">refresh</md-icon>刷新</md-text-button></div>
+        <div class="opt-row"><span class="opt-txt"><span class="opt-name">余额</span></span><span id="cd-balance" class="small">-</span></div>
+        <div class="muted small" id="cd-balanceCh"></div>
+      </md-filled-card>
+    </section>
+
+    <!-- ============ 用户资料 ============ -->
+    <section id="page-profile" class="page hidden" hidden>
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">卡密信息</div><div class="card-sub">此卡密的标识与权限清单</div></div></div>
+        <div class="opt-row"><span class="opt-txt"><span class="opt-name">名称</span></span><span id="pf-name" class="small">-</span></div>
+        <div class="opt-row"><span class="opt-txt"><span class="opt-name">角色</span></span><span id="pf-role" class="small">-</span></div>
+        <div class="opt-row"><span class="opt-txt"><span class="opt-name">卡密 UID</span></span><span id="pf-uid" class="small mono">-</span></div>
+        <div class="opt-row"><span class="opt-txt"><span class="opt-name">可访问实例</span></span><span id="pf-branches" class="small muted">-</span></div>
+        <div class="opt-row"><span class="opt-txt"><span class="opt-name">可用提供商</span></span><span id="pf-channels" class="small muted">-</span></div>
+        <div class="opt-row"><span class="opt-txt"><span class="opt-name">模型白名单</span></span><span id="pf-models" class="small muted">-</span></div>
+      </md-filled-card>
+
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">管理员资料</div><div class="card-sub">发卡管理员公开的联系信息</div></div></div>
+        <div class="profile-head">
+          <img class="profile-avatar" id="pf-avatar" alt="" hidden>
+          <div class="profile-txt">
+            <div class="profile-name" id="pf-adminName">-</div>
+            <div class="profile-sub">网关管理员</div>
+          </div>
+        </div>
+        <div class="profile-bio" id="pf-adminBio">-</div>
+        <div class="card-sub" id="pf-adminOther" style="margin-top:8px"></div>
+      </md-filled-card>
+    </section>
+
+  </main>
+</div>
+
+<!-- ============ Shared dialogs ============ -->
+<div id="dlgOverlay" class="dlg-overlay" hidden>
+  <div class="dlg-box" role="dialog" aria-modal="true" aria-labelledby="dlgTitle">
+    <div class="dlg-head"><h3 id="dlgTitle">标题</h3><button class="dlg-x" id="dlgX" aria-label="关闭">✕</button></div>
+    <div class="dlg-body" id="dlgBody"></div>
+    <div class="dlg-foot">
+      <button class="pbtn pbtn-text" id="dlgCancel">取消</button>
+      <button class="pbtn pbtn-filled" id="dlgOk">确定</button>
+    </div>
   </div>
 </div>
 
-<script>
-const $ = s => document.querySelector(s);
-const fmt = n => (n == null ? '-' : Number(n).toLocaleString());
-const KEY = 'agw-user-key';
-let cardKey = localStorage.getItem(KEY) || '';
-let inst = '';
+<div id="snackbar" role="status" aria-live="polite"></div>
 
-async function api(path, key) {
-  const r = await fetch(path, { headers: key ? { Authorization: 'Bearer ' + key } : {} });
-  let j = null;
-  try { j = await r.json(); } catch (_) {}
-  if (!r.ok) throw new Error((j && j.error && (j.error.message || j.error)) || ('HTTP ' + r.status));
-  return j;
-}
-
-async function loadModels() {
-  try {
-    const base = inst && inst !== 'default' ? '/' + encodeURIComponent(inst) : '';
-    const j = await api(base + '/v1/models', cardKey);
-    const ids = ((j && j.data) || []).map(m => m.id);
-    $('#models').innerHTML = ids.length ? ids.map(m => '<span class="chip">' + m + '</span>').join('') : '<span class="muted">无可用模型</span>';
-  } catch (e) { $('#models').innerHTML = '<span class="muted">加载失败：' + e.message + '</span>'; }
-}
-
-async function loadBalance() {
-  try {
-    const base = inst && inst !== 'default' ? '/' + encodeURIComponent(inst) : '';
-    const j = await api(base + '/v1/credits', cardKey);
-    const v = j.total_remain != null ? j.total_remain : j.balance;
-    $('#balance').textContent = v != null ? (v + (j.unit ? ' ' + j.unit : '')) : '-';
-    $('#balanceCh').textContent = j.channel ? '渠道：' + j.channel : '';
-  } catch (e) { $('#balance').textContent = '-'; $('#balanceCh').textContent = e.message; }
-}
-
-async function loadMe() {
-  const me = await api('/v1/me', cardKey);
-  $('#cardName').textContent = me.name || '（未命名卡）';
-  $('#cardRole').textContent = me.role === 'admin' ? '管理员卡' : '用户卡';
-  $('#quota').textContent = me.unlimited ? '不限' : fmt(me.quotaTokens) + ' tokens';
-  $('#used').textContent = fmt(me.usedTokens) + (me.remainingTokens != null ? ' / ' + fmt(me.remainingTokens) : ' / -');
-  const pct = (!me.unlimited && me.quotaTokens > 0) ? Math.min(100, Math.round(me.usedTokens / me.quotaTokens * 100)) : 0;
-  $('#quotaBar').style.width = pct + '%';
-  $('#expire').textContent = me.expiresAt || '长期有效';
-  $('#rate').textContent = (me.rpm ? me.rpm + ' RPM' : '不限 RPM') + ' / ' + (me.tpm ? fmt(me.tpm) + ' TPM' : '不限 TPM');
-  const bs = me.branches || [];
-  $('#branches').innerHTML = bs.length ? bs.map(b => '<span class="chip">' + b + '</span>').join('') : '<span class="muted">仅当前实例</span>';
-  const sel = $('#instSel');
-  if (bs.length > 1) {
-    sel.innerHTML = bs.map(b => '<option value="' + b + '"' + (b === inst ? ' selected' : '') + '>' + b + '</option>').join('');
-    sel.classList.remove('hidden');
-  } else sel.classList.add('hidden');
-  if (!inst || !bs.includes(inst)) inst = bs[0] || 'default';
-  sel.value = inst;
-  loadModels();
-  loadBalance();
-}
-
-async function login(key) {
-  $('#loginErr').textContent = '';
-  try {
-    await api('/v1/me', key);
-    cardKey = key;
-    localStorage.setItem(KEY, key);
-    inst = '';
-    $('#loginCard').classList.add('hidden');
-    $('#app').classList.remove('hidden');
-    loadMe().catch(e => { $('#models').innerHTML = '<span class="muted">' + e.message + '</span>'; });
-  } catch (e) {
-    $('#loginErr').textContent = e.message;
-    localStorage.removeItem(KEY);
-  }
-}
-
-$('#loginBtn').onclick = () => { const k = $('#keyInput').value.trim(); if (k) login(k); };
-$('#keyInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('#loginBtn').click(); });
-$('#logoutBtn').onclick = () => { localStorage.removeItem(KEY); location.reload(); };
-$('#instSel').onchange = e => { inst = e.target.value; loadModels(); loadBalance(); };
-
-if (cardKey) { $('#keyInput').value = cardKey; login(cardKey); }
-</script>
+<script type="module" src="/user/app.js"></script>
 </body>
 </html>

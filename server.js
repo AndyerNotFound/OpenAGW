@@ -94,7 +94,7 @@ async function handleHttp(cfg, req, res) {
 // /admin is only reachable through /<sid>/admin (req._panelSid); a bare /admin stays 404.
   const allowed = p === '/v1' || p.startsWith('/v1/')
     || p === '/v1beta' || p.startsWith('/v1beta/')
-    || p === '/user' || p === '/user/'
+    || p === '/user' || p.startsWith('/user/')
     || p === '/plugins' || p.startsWith('/plugins/')
     || p === '/api/app' || p.startsWith('/api/app/')
     || (!!req._panelSid && (p === '/admin' || p.startsWith('/admin/')));
@@ -137,7 +137,13 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
   }
 
 // ===== User portal (card holders): GET /user serves the page, GET /v1/me describes the card =====
-  if ((p === '/user' || p === '/user/') && req.method === 'GET') {
+// /user -> /user/: relative asset URLs resolve one level up without the trailing slash,
+// so the page must be served from the canonical directory URL.
+  if (p === '/user' && req.method === 'GET') {
+    res.writeHead(301, { 'Location': '/user/' });
+    return res.end();
+  }
+  if (p === '/user/' && req.method === 'GET') {
     const f = path.join(__dirname, 'user', 'index.html');
     fs.readFile(f, (err, buf) => {
       if (err) return sendError('openai', res, 404, 'not found: ' + req.method + ' ' + p);
@@ -145,6 +151,23 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
       res.end(buf);
     });
     return;
+  }
+/* /user/<static> -- user-portal assets (styles, script, icon font). The page holds no session,
+ * so the files are public; the card key itself never leaves the browser. */
+  if (p.startsWith('/user/') && req.method === 'GET') {
+    let rel;
+    try { rel = decodeURIComponent(p.slice('/user/'.length)); } catch (e) { rel = ''; }
+    const root = path.join(__dirname, 'user');
+    const f = path.join(root, rel);
+    const MIME = { '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
+      '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.png': 'image/png' };
+    const ext = path.extname(rel).toLowerCase();
+    if (rel && !rel.includes('\0') && f.startsWith(root + path.sep) && MIME[ext]
+        && fs.existsSync(f) && fs.statSync(f).isFile()) {
+      res.writeHead(200, { 'Content-Type': MIME[ext], 'Cache-Control': 'no-store, no-cache, must-revalidate' });
+      return res.end(fs.readFileSync(f));
+    }
+    return sendError('openai', res, 404, 'not found: ' + req.method + ' ' + p);
   }
   if (p === '/v1/me' && req.method === 'GET') {
     const authR = checkAuth(cfg, req, u.searchParams);
@@ -156,6 +179,9 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
     info.rpm = Number(uk.rpm) || 0;
     info.tpm = Number(uk.tpm) || 0;
     info.branches = availableBranches(cfg, uk);
+    info.channels = permissions.list(uk.channels);
+    const ap = (cfg.adminProfile && typeof cfg.adminProfile === 'object') ? cfg.adminProfile : {};
+    info.admin = { name: String(ap.name || ''), avatar: String(ap.avatar || ''), profile: String(ap.profile || ''), other: String(ap.other || '') };
     res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders() });
     return res.end(JSON.stringify(info));
   }
