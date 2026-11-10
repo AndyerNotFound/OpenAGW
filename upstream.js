@@ -94,12 +94,29 @@ function digPath(obj, dotPath) {
   }
   return cur;
 }
+/* Upstream balances arrive as numbers, numeric strings or nothing at all.
+ * "no value" must stay distinguishable from 0, otherwise an empty upstream balance is summed as a zero balance. */
+function balanceNumber(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'string' && v.trim() === '') return null;
+  const n = Number(v);
+  return isFinite(n) ? n : null;
+}
+/* A balance path is written against the host root ("/v1/user/info", "/api/paas/v4/user/info") while
+ * baseUrl usually already carries that prefix (".../v1", ".../api/paas/v4"). Joining them verbatim
+ * produced /v1/v1/user/info and /api/paas/v4/api/paas/v4/user/info, which the upstream answers with 404,
+ * so the channel balance could never resolve. Strip the repeated prefix; a path that only shares the
+ * host, or adds its own segment ("/credits" on ".../v1"), is joined exactly as written. */
 function resolveBalanceUrl(ch, t) {
   const raw = String(t.url || '').trim();
   if (/^https?:\/\//i.test(raw)) return raw;
   const base = String(ch.baseUrl || '').trim().replace(/\/+$/, '');
   if (!base) throw new Error('渠道 ' + ch.name + ' 未配置 baseUrl, 无法拼接相对余额接口地址: ' + raw);
-  return base + (raw.startsWith('/') ? raw : '/' + raw);
+  let p = raw.startsWith('/') ? raw : '/' + raw;
+  let basePath = '';
+  try { basePath = new URL(base).pathname.replace(/\/+$/, ''); } catch (_) {}
+  if (basePath && basePath !== '/' && (p === basePath || p.startsWith(basePath + '/'))) p = p.slice(basePath.length) || '/';
+  return base + p;
 }
 //// look up a channel balance -> cb({ok, balance, unit, url, status, error, raw?}); never throws (internal errors become a 500-shaped result)
 function fetchChannelBalance(cfg, ch, cb) {
@@ -121,6 +138,7 @@ function fetchChannelBalance(cfg, ch, cb) {
         if (upRes.statusCode >= 400) return fin({ ok: false, status: 502, upstream: upRes.statusCode, error: '上游返回 ' + upRes.statusCode + ': ' + txt.slice(0, 200) });
         let j; try { j = JSON.parse(txt); } catch (e) { return fin({ ok: false, status: 502, error: '上游响应非 JSON', raw: txt.slice(0, 300) }); }
         const v = digPath(j, t.path);
+        const missing = v === undefined || v === '';
 /* Multi-currency: surfaced when the upstream returns balance_infos (DeepSeek carries both CNY/USD) */
         let amounts;
         if (Array.isArray(j.balance_infos)) {
@@ -130,11 +148,11 @@ function fetchChannelBalance(cfg, ch, cb) {
           if (list.length > 1) amounts = list;
         }
 /* Fallback when the value path misses but the upstream carries balance_infos, so it does not fail outright */
-        if (v === undefined && !amounts) return fin({ ok: false, status: 502, error: '余额路径 ' + t.path + ' 在上游响应中不存在', raw: txt.slice(0, 300) });
+        if (missing && !amounts) return fin({ ok: false, status: 502, error: '余额路径 ' + t.path + ' 在上游响应中不存在', raw: txt.slice(0, 300) });
         fin({
           ok: true,
-          balance: v === undefined ? amounts[0].value : v,
-          unit: v === undefined ? amounts[0].unit : t.unit,
+          balance: missing ? amounts[0].value : v,
+          unit: missing ? amounts[0].unit : t.unit,
           url, upstream: upRes.statusCode,
           ...(amounts ? { amounts } : {})
         });
@@ -203,31 +221,46 @@ function balanceAggregate(cfg, uk, cb) {
   const done = () => {
     let sum = 0, anyRate = false, partial = false, okCount = 0;
     const noRateUnits = [];
+    const byUnit = {};
+    const failed = [];
     const channels = all.map((c, i) => {
       const r = results[i];
       if (!r || !r.ok) {
         partial = true;
-        return { channel: c.name, ok: false, error: (r && r.error) || '查询失败' };
+        const why = (r && r.error) || '查询失败';
+        failed.push(c.name + '=' + why);
+        return { channel: c.name, ok: false, error: why };
       }
       okCount++;
-      const n = Number(r.balance);
-      const v = isFinite(n) ? n : null;
+      const v = balanceNumber(r.balance);
       const unit = r.unit || '';
       const rate = balanceFxRate(cfg, unit);
       const item = { channel: c.name, ok: true, total_remain: v, unit };
-      if (v != null && rate != null) {
+      if (v == null) {
+        item.no_value = true; partial = true;
+        return item;
+      }
+      byUnit[unit] = Math.round(((byUnit[unit] || 0) + v) * 10000) / 10000;
+      if (rate != null) {
         const conv = Math.round(v * rate * 10000) / 10000;
         item.remain_base = conv;
         sum += conv; anyRate = true;
-      } else if (rate == null) {
+      } else {
         item.no_rate = true; partial = true;
         if (!noRateUnits.includes(unit)) noRateUnits.push(unit);
       }
       return item;
     });
     const total = anyRate ? Math.round(sum * 10000) / 10000 : null;
-    log('[balance] 聚合', '渠道=' + all.length, 'ok=' + okCount, 'base=' + base, 'total=' + total, partial ? '(partial)' : '');
-    cb({ ok: true, aggregate: true, total_remain: total, unit: base, channels, partial, ok_count: okCount, ...(noRateUnits.length ? { unconverted_units: noRateUnits } : {}) });
+    const units = Object.keys(byUnit);
+    const breakdown = units.length && (total == null || noRateUnits.length || units.length > 1) ? byUnit : null;
+    log('[balance] 聚合', '实例=' + (cfg._name || 'default'), '渠道=' + all.length, 'ok=' + okCount, 'base=' + base,
+      'total=' + total, partial ? '(partial)' : '',
+      breakdown ? '按币种=' + JSON.stringify(breakdown) : '',
+      failed.length ? '失败: ' + failed.join('; ') : '');
+    cb({ ok: true, aggregate: true, total_remain: total, unit: base, channels, partial, ok_count: okCount,
+      ...(breakdown ? { totals_by_unit: breakdown } : {}),
+      ...(noRateUnits.length ? { unconverted_units: noRateUnits } : {}) });
   };
   all.forEach((c, i) => {
     if (!balanceTarget(c)) {
@@ -290,4 +323,4 @@ function setupProbe(cfg) {
   log('[probe] 成功率探测已开启: 间隔', Math.max(1, Number(cfg.probe.intervalMin) || 10), '分钟, 模式', cfg.probe.mode || 'models');
 }
 
-module.exports = { http, https, net, tls, fs, path, crypto, os, zlib, joinUrl, upstreamRequest, BALANCE_PRESETS, presetForChannel, balanceTarget, balanceAuthHeaders, digPath, resolveBalanceUrl, fetchChannelBalance, _balanceCache, balanceCacheTtl, balanceCacheKey, fetchBalanceCached, balanceChannelList, pickBalanceChannel, balanceFxRate, balanceAggregate, probeOnce, probeRound, setupProbe };
+module.exports = { http, https, net, tls, fs, path, crypto, os, zlib, joinUrl, upstreamRequest, BALANCE_PRESETS, presetForChannel, balanceTarget, balanceAuthHeaders, digPath, resolveBalanceUrl, fetchChannelBalance, _balanceCache, balanceCacheTtl, balanceCacheKey, fetchBalanceCached, balanceChannelList, pickBalanceChannel, balanceFxRate, balanceAggregate, balanceNumber, probeOnce, probeRound, setupProbe };

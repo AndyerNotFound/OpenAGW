@@ -186,6 +186,7 @@ md-filled-card{
 .muted{color:var(--md-sys-color-on-surface-variant)}
 .small{font-size:10px}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:10px}
+.list-gap{display:flex;flex-direction:column;gap:var(--agw-sp)}
 .empty{padding:32px 8px;text-align:center;color:var(--md-sys-color-on-surface-variant)}
 .hidden{display:none!important}
 
@@ -323,3 +324,38 @@ md-icon{font-feature-settings:'liga';letter-spacing:normal;line-height:1;
 .login-err{display:none;font-size:10px;color:var(--md-sys-color-on-error-container);
   background:var(--md-sys-color-error-container);border-radius:8px;padding:8px 10px;margin-bottom:8px}
 .login-err.show{display:block}
+
+/* ============ 模型列表：渠道分组按钮 ============ */
+.md-chips{display:flex;flex-wrap:wrap;gap:4px}
+.md-chip{display:inline-flex;align-items:center;gap:6px;height:29px;padding:0 10px;border-radius:12px;cursor:pointer;
+  border:1px solid var(--md-sys-color-outline-variant);background:var(--md-sys-color-surface-container-high);
+  color:var(--md-sys-color-on-surface-variant);font-size:10px;font-weight:500;font-family:inherit;transition:background .15s}
+.md-chip:hover{background:var(--md-sys-color-surface-container-highest)}
+.md-chip.on{background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container);border-color:transparent}
+.md-chip:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:2px}
+.md-chip-nm{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.md-chip-cnt{font-size:9px;font-weight:600;color:var(--md-sys-color-primary);font-variant-numeric:tabular-nums}
+.md-chip.on .md-chip-cnt{color:var(--md-sys-color-on-secondary-container)}
+.md-detail-head{display:flex;align-items:baseline;gap:6px}
+.md-detail-head .nm{font-size:11px;font-weight:600;color:var(--md-sys-color-on-surface)}
+.md-detail-head .cnt{font-size:9px;color:var(--md-sys-color-on-surface-variant)}
+
+/* ============ 公告 ============ */
+.an-card{display:flex;flex-direction:column;gap:4px;padding:10px 12px;cursor:pointer;
+  background:color-mix(in srgb, var(--md-sys-color-surface-container-high) 72%, transparent);
+  border:1px solid var(--md-sys-color-outline-variant);border-radius:var(--md-sys-shape-corner-medium)}
+.an-card:hover{background:var(--md-sys-color-surface-container-highest)}
+.an-card:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:2px}
+.an-card-head{display:flex;align-items:baseline;gap:8px;min-width:0}
+.an-title{font-size:12px;font-weight:600;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.an-time{font-size:9px;color:var(--md-sys-color-on-surface-variant);flex:none;font-variant-numeric:tabular-nums}
+.an-body{font-size:11px;line-height:1.6;color:var(--md-sys-color-on-surface-variant);white-space:pre-wrap;word-break:break-word;
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.an-detail{display:flex;flex-direction:column;gap:var(--agw-sp);min-width:0}
+.an-detail-meta{font-size:10px;color:var(--md-sys-color-on-surface-variant);font-variant-numeric:tabular-nums}
+.an-detail-body{font-size:12px;line-height:1.75;white-space:pre-wrap;word-break:break-word;user-select:text;-webkit-user-select:text}
+
+/* ============ 品牌 Logo（侧边栏 / 顶栏 / 简介卡） ============ */
+.brand-logo{width:28px;height:28px;flex:none;border-radius:8px;object-fit:contain;
+  background:color-mix(in srgb, var(--md-sys-color-surface-container-high) 55%, transparent)}
+.topbar-logo{width:24px;height:24px;flex:none;object-fit:contain;border-radius:7px;margin-right:2px}

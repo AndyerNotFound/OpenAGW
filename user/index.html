@@ -20,7 +20,8 @@
 <aside class="rail" id="rail" data-open="false" aria-label="主导航">
   <div class="rail-head">
     <div class="rail-brand" title="OpenAGW 用户端">
-      <div class="rail-brand-txt"><div class="name">OpenAGW</div><div class="ver">用户端 · Material Web</div></div>
+      <img class="brand-logo" id="railLogo" alt="" hidden>
+      <div class="rail-brand-txt"><div class="name" id="brandName">OpenAGW</div><div class="ver" id="brandVer">用户端 · Material Web</div></div>
     </div>
     <button type="button" class="rail-toggle" id="railToggle" aria-label="展开侧边栏" aria-expanded="false" aria-controls="railList">
       <span class="msym" id="railToggleIc">menu</span>
@@ -40,7 +41,9 @@
 <!-- ============ Main area ============ -->
 <div class="shell">
   <header class="topbar">
+    <img class="topbar-logo" id="topLogo" alt="" hidden>
     <h1 id="pageTitle">首页</h1>
+    <md-icon-button data-goto="announce" aria-label="公告" title="公告"><md-icon>campaign</md-icon></md-icon-button>
     <md-icon-button id="refreshBtn" aria-label="刷新" title="刷新"><md-icon>refresh</md-icon></md-icon-button>
   </header>
 
@@ -48,6 +51,18 @@
 
     <!-- ============ 首页 ============ -->
     <section id="page-home" class="page">
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">简介</div><div class="card-sub">站点概况</div></div></div>
+        <div class="about">
+          <img class="about-logo" id="ov-site-logo" alt="" hidden>
+          <div class="about-txt">
+            <div class="about-name" id="ov-site-name">OpenAGW</div>
+            <div class="about-ver" id="ov-site-ver">用户端 · Material Web</div>
+          </div>
+          <div class="about-lines" id="ov-site-intro"><div>OpenAI / Claude / Gemini 三方言互转的统一网关；使用管理员分发的卡密调用 <b>/v1</b> 接口，额度与权限按卡计算。</div></div>
+        </div>
+      </md-filled-card>
+
       <md-filled-card>
         <div class="card-head"><div><div class="card-title">卡密概览</div><div class="card-sub">当前卡密的额度、有效期与限流</div></div></div>
         <div class="about">
@@ -62,9 +77,26 @@
       </md-filled-card>
 
       <md-filled-card>
-        <div class="card-head"><div><div class="card-title">可用模型</div><div class="card-sub" id="md-instNote">当前实例</div></div>
+        <div class="card-head"><div><div class="card-title">公告</div><div class="card-sub">面向用户的通知，新公告在前</div></div>
+          <md-text-button data-goto="announce">全部公告</md-text-button></div>
+        <div id="ov-ann-list" class="list-gap"><div class="empty">正在加载…</div></div>
+      </md-filled-card>
+    </section>
+
+    <!-- ============ 模型列表 ============ -->
+    <section id="page-models" class="page hidden" hidden>
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">模型列表</div><div class="card-sub" id="md-instNote">按渠道分组，当前实例</div></div>
           <md-outlined-select id="instSel" label="实例" style="width:132px"></md-outlined-select></div>
-        <div id="md-list" class="chips"><div class="empty">正在加载…</div></div>
+        <div id="md-groups"><div class="empty">正在加载…</div></div>
+      </md-filled-card>
+    </section>
+
+    <!-- ============ 公告列表 ============ -->
+    <section id="page-announce" class="page hidden" hidden>
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">公告</div><div class="card-sub">面向用户的通知，新公告在前</div></div></div>
+        <div id="an-list" class="list-gap"><div class="empty">正在加载…</div></div>
       </md-filled-card>
     </section>
 
@@ -108,6 +140,19 @@
 
     <!-- ============ 用户资料 ============ -->
     <section id="page-profile" class="page hidden" hidden>
+      <md-filled-card>
+        <div class="card-head"><div><div class="card-title">我的资料</div><div class="card-sub">头像、昵称与简介，仅自己可见的展示信息</div></div>
+          <md-filled-tonal-button id="pf-edit"><md-icon slot="icon">edit</md-icon>编辑资料</md-filled-tonal-button></div>
+        <div class="profile-head">
+          <img class="profile-avatar" id="pf-myAvatar" alt="" hidden>
+          <div class="profile-txt">
+            <div class="profile-name" id="pf-myName">-</div>
+            <div class="profile-sub" id="pf-myRole">-</div>
+          </div>
+        </div>
+        <div class="profile-bio" id="pf-myBio">尚未填写简介。</div>
+      </md-filled-card>
+
       <md-filled-card>
         <div class="card-head"><div><div class="card-title">卡密信息</div><div class="card-sub">此卡密的标识与权限清单</div></div></div>
         <div class="opt-row"><span class="opt-txt"><span class="opt-name">名称</span></span><span id="pf-name" class="small">-</span></div>

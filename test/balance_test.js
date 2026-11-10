@@ -13,6 +13,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const G = require('../gateway.js');
+const U = require('../upstream.js');
 const { utf8 } = require('../util.js');
 const u8 = utf8();
 const adminMod = require('../admin.js');
@@ -44,6 +45,7 @@ function fakeUpstream() {
       if (req.url.startsWith('/v1/user/info')) return send({ data: { balance: '42.50', currency: 'CNY' } });
       if (req.url.startsWith('/user/balance')) return send({ balance_infos: [{ currency: 'CNY', total_balance: '88.80' }] });
       if (req.url.startsWith('/v2/user/info')) return send({ data: { balance: '10' } }); // USD 口径(供汇率折算用例)
+      if (req.url.startsWith('/v3/user/info')) return send({ data: { balance: null } }); // 上游明确指出没有余额
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: { message: 'unknown ' + req.url } }));
     });
@@ -135,6 +137,18 @@ function readCfg(file) {
   eq(rBadPath.status, 502, '取值路径不存在 → 502');
   const rBadUrl = await call(lc, Object.assign({}, lcCustom, { balanceUrl: 'http://:/bad' }));
   eq(rBadUrl.status, 400, '地址非法 → 400(旧实现 500 Invalid URL)');
+// baseUrl 自带路径段时不能再叠一遍：/v1/v1/user/info、/api/paas/v4/api/paas/v4/user/info 都会 404
+  const rV1Base = await call(lc, Object.assign({}, lcCustom, { baseUrl: `http://127.0.0.1:${up.port}/v1` }));
+  ok(rV1Base.ok, 'baseUrl 已带 /v1 时相对余额地址仍可用');
+  eq(rV1Base.url, `http://127.0.0.1:${up.port}/v1/user/info`, '地址拼接: 不再拼成 /v1/v1/user/info');
+  eq(U.resolveBalanceUrl({ name: 'sf', baseUrl: 'https://api.siliconflow.cn/v1' }, { url: '/v1/user/info' }),
+    'https://api.siliconflow.cn/v1/user/info', '预设路径与 baseUrl 的 /v1 前缀重合 → 去掉重复段');
+  eq(U.resolveBalanceUrl({ name: 'bm', baseUrl: 'https://open.bigmodel.cn/api/paas/v4' }, { url: '/api/paas/v4/user/info' }),
+    'https://open.bigmodel.cn/api/paas/v4/user/info', '多段 baseUrl 前缀重合 → 去掉重复段');
+  eq(U.resolveBalanceUrl({ name: 'ds', baseUrl: 'https://api.deepseek.com' }, { url: '/user/balance' }),
+    'https://api.deepseek.com/user/balance', 'baseUrl 无路径 → 原样拼接');
+  eq(U.resolveBalanceUrl({ name: 'wb', baseUrl: 'http://127.0.0.1:8788/v1' }, { url: '/credits' }),
+    'http://127.0.0.1:8788/v1/credits', '相对路径自带新段 → 保留 baseUrl 前缀');
 
 /* ============ 4. Client endpoints (OpenAI semantics) ============ */
   console.log('── Part 4: /v1/dashboard/billing/* ──');
@@ -209,6 +223,23 @@ function readCfg(file) {
   near(usd2 && usd2.remain_base, 72, '聚合: 明细带折算值 remain_base');
   eq(usd2 && usd2.no_rate, undefined, '聚合: 配了汇率不再标 no_rate');
   ok(!((agg2.json && agg2.json.unconverted_units) || []).length, '聚合: 无 unconverted_units');
+// 只有未配汇率的币种：基准币种合计为空，但按币种的合计必须给出，客户端才有东西可显示
+  const cfgUsdOnly = { ...cfgE2E, _name: 'usd-only', balanceFx: { base: 'CNY', rates: { CNY: 1 } },
+    channels: [{ name: 'usd-relay', type: 'openai', baseUrl: `http://127.0.0.1:${up.port}`, apiKey: 'sk-up', balanceUrl: '/v2/user/info', balancePath: 'data.balance', balanceUnit: 'USD' }] };
+  const aggUsd = await new Promise(r => G.balanceAggregate(cfgUsdOnly, null, r));
+  eq(aggUsd.total_remain, null, '聚合: 只有未配汇率的币种 → 基准币种合计为 null');
+  near(aggUsd.totals_by_unit && aggUsd.totals_by_unit.USD, 10, '聚合: 没有汇率也给出按币种的合计');
+  ok(aggUsd.unconverted_units.includes('USD'), '聚合: 未折算币种照旧报告');
+// 上游返回 null 余额 = 没有数值, 不能当成 0 计入合计
+  const cfgNull = { ...cfgE2E, _name: 'null-bal',
+    channels: [{ name: 'null-relay', type: 'openai', baseUrl: `http://127.0.0.1:${up.port}`, apiKey: 'sk-up', balanceUrl: '/v3/user/info', balancePath: 'data.balance', balanceUnit: 'CNY' }] };
+  const aggNull = await new Promise(r => G.balanceAggregate(cfgNull, null, r));
+  eq(aggNull.total_remain, null, '聚合: 上游余额为 null 不计成 0');
+  ok(aggNull.channels[0] && aggNull.channels[0].no_value === true, '聚合: 明细标 no_value');
+  eq(U.balanceNumber(null), null, 'balanceNumber: null → null');
+  eq(U.balanceNumber(''), null, 'balanceNumber: 空串 → null');
+  eq(U.balanceNumber('12.5'), 12.5, 'balanceNumber: 数值串 → 数值');
+  eq(U.balanceNumber(0), 0, 'balanceNumber: 0 仍是 0');
 // The key card whitelist constrains aggregation too
   const aggWl = await get(gwFx.port, '/v1/credits', { Authorization: 'Bearer sk-card-one' });
   eq(aggWl.json && aggWl.json.channels && aggWl.json.channels.length, 1, '聚合: 绑定卡只见白名单渠道');

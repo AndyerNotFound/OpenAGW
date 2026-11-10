@@ -1458,6 +1458,7 @@ async function handleAdmin(cfg, req, res, u, p, bodyStr) {
       probe: c.probe || { enable: false, intervalMin: 10, mode: 'models' },
       keyLength: c.keyLength || 24,
       modelSync: c.modelSync || { enable: true, intervalHours: 24 },
+      site: (c.site && typeof c.site === 'object') ? { name: String(c.site.name||''), ver: String(c.site.ver||''), logo: String(c.site.logo||''), intro: String(c.site.intro||'') } : { name:'', ver:'', logo:'', intro:'' },
       proxies: c.proxies || {},
       channels: maskedChannels(c, reveal),
       forceChannel: c.forceChannel || null,
@@ -1543,6 +1544,18 @@ async function handleAdmin(cfg, req, res, u, p, bodyStr) {
       try { logfile.configure(c.log); } catch (_) {}
     }
     if (data.proxies !== undefined) c.proxies = data.proxies;
+// Site brand (name / subtitle / logo data-URL / intro): server-side so every device and the
+// user portal see the same identity. Logo is a data: URL already downscaled by the panel.
+    if (data.site !== undefined && data.site && typeof data.site === 'object') {
+      const logo = String(data.site.logo || '');
+      if (logo && logo.length > 400 * 1024) return jsonRes(res, 400, { error: 'Logo 数据过大（超过约 300KB）' });
+      c.site = {
+        name: String(data.site.name || '').slice(0, 60),
+        ver: String(data.site.ver || '').slice(0, 60),
+        logo: /^data:image\//.test(logo) ? logo : '',
+        intro: String(data.site.intro || '').slice(0, 2000),
+      };
+    }
 // Parameter override (instance level): empty/absent-clears; otherwise a non-empty object
     if (data.paramOverride !== undefined) {
       const raw = data.paramOverride;

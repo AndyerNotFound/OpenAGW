@@ -11,7 +11,7 @@ const zlib = require('zlib');
 const { poolRoute, tlsBlocked, BILLING_PATHS, GENERIC_BALANCE_PATHS, createInstancePool, poolLoadAll, setupModelSync, statsFlushFile, setupStatsFlush } = require('./pool');
 const { sendError, corsHeaders, jsonErr, checkAuth, keyCreditsJSON, genApiKey, persistRuntimeCfg, availableBranches, collectJson, modelsResponse, sendJson, loadKeyUsage, makeGatewayApi } = require('./router');
 const { VERSION, utf8, log, logErr } = require('./util');
-const { balanceAggregate, pickBalanceChannel, fetchBalanceCached, fetchChannelBalance, balanceTarget, setupProbe } = require('./upstream');
+const { balanceAggregate, pickBalanceChannel, fetchBalanceCached, fetchChannelBalance, balanceTarget, balanceNumber, setupProbe } = require('./upstream');
 const { fetchUpstreamModels, syncModels } = require('./sync');
 const { handleExtraEndpoint } = require('./passthrough');
 const { handleChat } = require('./record');
@@ -169,6 +169,37 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
     }
     return sendError('openai', res, 404, 'not found: ' + req.method + ' ' + p);
   }
+// Small body collector for the user-portal POST endpoints (the main POST body is not read yet here)
+function collectBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    const u8 = utf8();
+    req.on('data', c => { body += u8(c); if (body.length > maxBytes) req.destroy(); });
+    req.on('end', () => resolve(body));
+    req.on('error', reject);
+  });
+}
+
+// ===== Site brand: public, no card required (name / logo / intro are the site's public face) =====
+  if (p === '/v1/site' && req.method === 'GET') {
+    const st = (cfg.site && typeof cfg.site === 'object') ? cfg.site : {};
+    res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders() });
+    return res.end(JSON.stringify({ ok: true, name: String(st.name || ''), ver: String(st.ver || ''), logo: String(st.logo || ''), intro: String(st.intro || '') }));
+  }
+
+// ===== Announcements: read-only for card holders (write stays in the admin panel) =====
+  if (p === '/v1/announcements' && req.method === 'GET') {
+    const authR = checkAuth(cfg, req, u.searchParams);
+    if (!authR.ok) return sendError('openai', res, authR.status || 401, authR.error || 'invalid key');
+    let items = [];
+    try {
+      const j = JSON.parse(fs.readFileSync(path.join(cfg._configFile ? path.dirname(cfg._configFile) : __dirname, 'announcements.json'), 'utf8'));
+      items = Array.isArray(j.items) ? j.items : [];
+    } catch (_) {}
+    items.sort((a, b) => (b.at || 0) - (a.at || 0));
+    res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders() });
+    return res.end(JSON.stringify({ ok: true, items }));
+  }
   if (p === '/v1/me' && req.method === 'GET') {
     const authR = checkAuth(cfg, req, u.searchParams);
     if (!authR.ok) return sendError('openai', res, authR.status || 401, authR.error || 'invalid key');
@@ -180,10 +211,34 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
     info.tpm = Number(uk.tpm) || 0;
     info.branches = availableBranches(cfg, uk);
     info.channels = permissions.list(uk.channels);
+    info.userProfile = (uk.userProfile && typeof uk.userProfile === 'object')
+      ? { avatar: String(uk.userProfile.avatar || ''), bio: String(uk.userProfile.bio || '') }
+      : { avatar: '', bio: '' };
     const ap = (cfg.adminProfile && typeof cfg.adminProfile === 'object') ? cfg.adminProfile : {};
     info.admin = { name: String(ap.name || ''), avatar: String(ap.avatar || ''), profile: String(ap.profile || ''), other: String(ap.other || '') };
     res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders() });
     return res.end(JSON.stringify(info));
+  }
+
+// ===== Self-service profile: a card holder edits their own display info (avatar URL + bio) =====
+// Only these two fields are writable; quota / role / whitelists stay admin-only. The card object is
+// patched in place on the owning config and persisted, so a card issued on another instance still
+// writes back to its home config (one card = one user across instances).
+  if (p === '/v1/me/profile' && req.method === 'POST') {
+    const authR = checkAuth(cfg, req, u.searchParams);
+    if (!authR.ok) return sendError('openai', res, authR.status || 401, authR.error || 'invalid key');
+    const uk = authR.userKey || null;
+    if (!uk) return sendError('openai', res, 401, 'invalid key');
+    let j = {};
+    try { j = JSON.parse(await collectBody(req, 64 * 1024) || '{}'); } catch (e) { return sendError('openai', res, 400, 'JSON 无效'); }
+    const avatar = String(j.avatar == null ? '' : j.avatar).trim();
+    if (avatar && (avatar.length > 2048 || !/^https:\/\//i.test(avatar)))
+      return sendError('openai', res, 400, '头像必须是 https:// 开头的图片地址（留空为不设置）');
+    const bio = String(j.bio == null ? '' : j.bio).slice(0, 500);
+    uk.userProfile = { avatar, bio };
+    try { persistRuntimeCfg(authR.keyOwner || cfg); } catch (e) { return sendError('openai', res, 500, '保存失败: ' + e.message); }
+    res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders() });
+    return res.end(JSON.stringify({ ok: true, userProfile: uk.userProfile }));
   }
 
 // ===== Accessible branch list (card auth, filtered by branches) =====
@@ -227,7 +282,8 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
         if (!agg.ok) return sendError('openai', res, agg.status || 503, agg.error);
         return sendJson(res, 200, {
           ...agg,
-          data: { total_remain: agg.total_remain, unit: agg.unit, channels: agg.channels, partial: agg.partial, ok_count: agg.ok_count },
+          data: { total_remain: agg.total_remain, unit: agg.unit, channels: agg.channels, partial: agg.partial, ok_count: agg.ok_count,
+            ...(agg.totals_by_unit ? { totals_by_unit: agg.totals_by_unit } : {}) },
         });
       });
     } else {
@@ -240,8 +296,7 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
         return sendError('openai', res, r.status || 502, r.error || 'balance query failed');
       }
       log('[balance]', ch.name, (isGrants ? 'credit_grants' : 'subscription'), 'channel=' + ch.name, 'unit=' + (r.unit || '-'), 'ms=' + (Date.now() - t0) + (cached ? ' (cached)' : ''));
-      const num = Number(r.balance);
-      const avail = isFinite(num) ? num : null;
+      const avail = balanceNumber(r.balance);
       const common = { channel: ch.name, balance: r.balance, unit: r.unit || '', upstream_url: r.url };
 // Generic balance shape: compatible with any client's "balance path + JSON key" config (provides total_remain / balance / remaining / total_available)
       if (GENERIC_BALANCE_PATHS.has(p)) {

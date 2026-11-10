@@ -401,6 +401,7 @@ async function renderReplace(){
   const cur = await fillInstSelect($('#topInst'), Store.inst, signal); Store.inst=cur;
   try{
     const cfg=await adapter.getConfig(cur,signal);
+    if(cfg.site && (cfg.site.name||cfg.site.logo||cfg.site.intro)) applyBrand(cfg.site);
     const rp=cfg.replace||{};
     rpLists.out=Array.isArray(rp.out)?rp.out.map(r=>({re:String(r.re||''),to:String(r.to==null?'':r.to),ci:!!r.ci})):[];
     rpLists.inc=Array.isArray(rp.inc)?rp.inc.map(r=>({re:String(r.re||''),to:String(r.to==null?'':r.to),ci:!!r.ci})):[];
@@ -2252,7 +2253,7 @@ document.body.addEventListener('click', e=>{
     else if(a==='deleteProvider'){ if(confirm(`删除渠道 ${n}？`)) adapter.deleteChannel(Store.inst,n).then(renderProviders).catch(x=>snack(x.message,true)); }
     else if(a==='openPortDialog') openPortDialog(n);
     else if(a==='delInstance') delInstance(n);
-    else if(a==='copyKey'||a==='toggleKey'||a==='delKey'||a==='rechargeKey') cardAction(a,act.dataset.key,act.dataset.name,act.dataset.on==='1');
+    else if(a==='copyKey'||a==='editKey'||a==='toggleKey'||a==='delKey'||a==='rechargeKey') cardAction(a,act.dataset.key,act.dataset.name,act.dataset.on==='1');
     else if(a==='chBalance') chBalanceAction(act.dataset.name);
     else if(a==='editProxy') openProxyDialog(n);
     else if(a==='delProxy') delProxy(n);
@@ -2467,15 +2468,14 @@ document.body.addEventListener('change', async e=>{
   }catch(err){ snack(err.message||'图片处理失败',true); bgSyncPreview(); }
 });
 
-// ---- Custom brand: page name + gateway logo (edit via the brand area top-left; localStorage, per device) ----
-// The logo is shown in the sidebar brand, the topbar (next to the page title), the about card, and as
-// the favicon. An SVG stays vector; raster images are downscaled with alpha preserved. It never leaves
-// the device: localStorage holds it as a data URL.
-let brandState={name:'OpenAGW',ver:'Material Web v2.11',logo:''};
+// ---- Site brand: name + logo + intro, stored on the server (config.site) so every device and the
+// user portal share one identity. The panel reads it with the instance config and saves through
+// saveConfig; localStorage is only a boot cache painted before the config lands.
+let brandState={name:'OpenAGW',ver:'Material Web v2.11',logo:'',intro:''};
 let brandDraft=null;        // logo picked in the open dialog; written to localStorage only on 保存
 let brandLogoCleared=false; // 移除 Logo pressed in the open dialog
 function applyBrand(b){
-  brandState={name:(b&&b.name)||'OpenAGW', ver:b&&b.ver!=null?b.ver:'Material Web v2.11', logo:(b&&b.logo)||''};
+  brandState={name:(b&&b.name)||'OpenAGW', ver:b&&b.ver!=null?b.ver:'Material Web v2.11', logo:(b&&b.logo)||'', intro:(b&&b.intro)||''};
   const n=$('.rail-brand .name'), v=$('.rail-brand .ver');
   if(n) n.textContent=brandState.name;
   if(v){ v.textContent=brandState.ver; v.style.display=brandState.ver?'':'none'; }
@@ -2542,14 +2542,17 @@ function openBrandDialog(){
     <md-text-button id="brandLogoClear" style="align-self:flex-start">移除 Logo</md-text-button>
     <md-outlined-text-field data-f="bname" label="名称" value="${escAttr(brandState.name)}"></md-outlined-text-field>
     <md-outlined-text-field data-f="bver" label="副标题（留空隐藏）" value="${escAttr(brandState.ver)}"></md-outlined-text-field>
-  </div>`, {okText:'保存', onOk:()=>{
+    <md-outlined-text-field data-f="bintro" label="站点简介（用户端首页可见，留空用默认文案）" type="textarea" rows="3" value="${escAttr(brandState.intro)}"></md-outlined-text-field>
+    <div style="font-size:9px;color:var(--md-sys-color-on-surface-variant)">品牌保存在网关配置中，所有设备与用户端展示一致；保存即热重载生效。</div>
+  </div>`, {okText:'保存', onOk:async ()=>{
     const v=dlgValue();
     const name=String(v.bname||'').trim()||'OpenAGW', ver=String(v.bver||'').trim();
     const logo=brandLogoSrc()||'';
-    try{ localStorage.setItem('agw-brand',JSON.stringify({name,ver,logo})); }
-    catch(e){ snack('保存失败：浏览器存储空间不足，请更换更小的 Logo',true); return false; }
-    applyBrand({name,ver,logo});
-    snack('品牌已更新');
+    const intro=String(v.bintro||'').trim();
+    applyBrand({name,ver,logo,intro});
+    try{ localStorage.setItem('agw-brand',JSON.stringify({name,ver,logo,intro})); }catch(_){}
+    try{ await adapter.saveConfig(Store.inst,{site:{name,ver,logo,intro}}); snack('品牌已保存'); }
+    catch(e){ snack('已应用到本机，但保存到网关失败： '+e.message,true); return false; }
     return true;
   }});
   brandSyncLogo();

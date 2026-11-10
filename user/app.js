@@ -287,9 +287,11 @@ document.body.addEventListener('change', async e=>{
 const VIEWS=[
   {id:'home',    label:'首页',     icon:'home'},
   {id:'card',    label:'卡密管理', icon:'confirmation_number'},
+  {id:'models',  label:'模型列表', icon:'view_module'},
+  {id:'announce',label:'公告',     icon:'campaign'},
   {id:'profile', label:'用户资料', icon:'person'},
 ];
-const TITLES={home:'首页',card:'卡密管理',profile:'用户资料'};
+const TITLES={home:'首页',card:'卡密管理',models:'模型列表',announce:'公告',profile:'用户资料'};
 const Store={ page:'home', me:null, inst:'', online:navigator.onLine };
 function buildNav(){
   $('#railList').innerHTML = VIEWS.map(v=>
@@ -364,7 +366,7 @@ async function go(page){
     if(!same && main) main.scrollTop=0;
     showPageEl(nextEl);
   }
-  const R={home:renderHome,card:renderCard,profile:renderProfile};
+  const R={home:renderHome,card:renderCard,models:renderModels,announce:renderAnnounce,profile:renderProfile};
   await R[page]?.();
 }
 
@@ -402,7 +404,7 @@ async function renderHome(){
   $('#ov-quotaText').textContent=me.unlimited?'不限额度':(fmtNum(me.usedTokens)+' / '+fmtNum(me.quotaTokens)+' tokens');
   $('#ov-quotaPct').textContent=me.unlimited?'':(pct+'%');
   renderInstSel(me);
-  await renderModels();
+  renderAnnPreview();
 }
 function renderInstSel(me){
   const sel=$('#instSel'); if(!sel) return;
@@ -418,14 +420,73 @@ function renderInstSel(me){
     sel.updateComplete.then(()=>{ sel.value=Store.inst; patchSelect(sel); }).catch(()=>{});
   }else sel.value=Store.inst;
 }
+// 模型列表：/v1/models 返回 {data:[{id, ...}]}，按模型 id 的「渠道/提供商/名称」三段式归类。
+// 网关的模型引用约定是 instance:channel:model（同名冲突才带前缀），所以按 owner/owned_by/渠道
+// 字段优先，退回按 id 形态分组；每种渠道一张分组卡片，组内按名称排序。
+let mdGroups=[];
 async function renderModels(){
-  const box=$('#md-list'); if(!box) return;
+  const box=$('#md-groups'); if(!box) return;
   box.innerHTML='<div class="empty" style="padding:12px 8px">正在加载…</div>';
   try{
     const j=await api(instBase()+'/v1/models');
-    const ids=((j&&j.data)||[]).map(m=>m.id);
-    box.innerHTML=ids.length?`<div class="chips">${ids.map(m=>`<span class="chip" title="${escAttr(m)}">${esc(m)}</span>`).join('')}</div>`:'<div class="empty" style="padding:12px 8px">无可用模型</div>';
-  }catch(e){ box.innerHTML=`<div class="empty" style="padding:12px 8px">加载失败：${esc(e.message)}</div>`; }
+    const list=((j&&j.data)||[]);
+    const groups=new Map();
+    for(const m of list){
+      const id=String(m.id||'');
+      const ch=String(m.owned_by||m.owner||'').trim();
+      const key=ch||'default';
+      if(!groups.has(key)) groups.set(key,[]);
+      groups.get(key).push(id);
+    }
+    mdGroups=[...groups.entries()].map(([ch,ids])=>({ch,ids:ids.sort((a,b)=>a.localeCompare(b))}))
+      .sort((a,b)=>a.ch.localeCompare(b.ch));
+    if(!mdGroups.length){ box.innerHTML='<div class="empty">当前实例没有可用模型</div>'; return; }
+    box.innerHTML='<div class="md-chips">'+mdGroups.map((g,i)=>
+      `<button type="button" class="md-chip" data-action="mdGroup" data-name="${i}" title="${escAttr(g.ch)}（${g.ids.length} 个模型）">`+
+      `<span class="md-chip-nm">${esc(g.ch)}</span><span class="md-chip-cnt">${g.ids.length}</span></button>`).join('')+'</div>'
+      +'<div id="md-detail" style="margin-top:8px"><div class="empty">选择一个渠道查看其模型</div></div>';
+  }catch(e){ box.innerHTML=`<div class="empty">加载失败：${esc(e.message)}</div>`; }
+}
+function openModelGroup(i){
+  const g=mdGroups[i]; if(!g) return;
+  const d=$('#md-detail'); if(!d) return;
+  $$('#md-groups .md-chip').forEach((el,idx)=>el.classList.toggle('on', idx===i));
+  d.innerHTML=`<div class="md-detail-head"><span class="nm">${esc(g.ch)}</span><span class="cnt">${g.ids.length} 个模型</span></div>`
+    +`<div class="chips" style="margin-top:6px">${g.ids.map(m=>`<span class="chip" title="${escAttr(m)}">${esc(m)}</span>`).join('')}</div>`;
+}
+
+// ============ 公告 ============
+let anItems=[];
+function fmtAt(t){ try{ const d=new Date(Number(t)||t); return isNaN(d)?'':d.toLocaleString(); }catch(_){ return ''; } }
+async function loadAnnouncements(){
+  try{ const j=await api('/v1/announcements'); anItems=Array.isArray(j.items)?j.items:[]; }
+  catch(e){ anItems=[]; }
+  return anItems;
+}
+function anCard(a){
+  return `<div class="an-card" data-action="anView" data-name="${escAttr(a.id)}" role="button" tabindex="0" aria-label="查看公告：${escAttr(a.title||'公告')}">
+    <div class="an-card-head"><span class="an-title">${esc(a.title||'（无标题）')}</span><span class="an-time">${fmtAt(a.at)}</span></div>
+    <div class="an-body">${esc(a.body||'')}</div>
+  </div>`;
+}
+async function renderAnnPreview(){
+  const box=$('#ov-ann-list'); if(!box) return;
+  await loadAnnouncements();
+  const top=anItems.slice(0,3);
+  box.innerHTML=top.length?top.map(anCard).join(''):'<div class="empty">暂无公告</div>';
+}
+async function renderAnnounce(){
+  const box=$('#an-list'); if(!box) return;
+  box.innerHTML='<div class="empty" style="padding:12px 8px">正在加载…</div>';
+  await loadAnnouncements();
+  box.innerHTML=anItems.length?anItems.map(anCard).join(''):'<div class="empty">暂无公告</div>';
+}
+function openAnnounceView(a){
+  if(!a) return;
+  openDialog(a.title||'公告', `<div class="an-detail">
+    <div class="an-detail-meta">${fmtAt(a.at)}</div>
+    <div class="an-detail-body">${esc(a.body||'（无内容）')}</div>
+  </div>`, {okText:'关闭', cancel:false});
 }
 
 // ============ 渲染：卡密管理 ============
@@ -450,15 +511,31 @@ async function renderBalance(){
   $('#cd-balance').textContent='查询中…'; $('#cd-balanceCh').textContent='';
   try{
     const j=await api(instBase()+'/v1/credits');
-    const v=j.total_remain!=null?j.total_remain:j.balance;
-    $('#cd-balance').textContent=v!=null?(v+(j.unit?' '+j.unit:'')):'-';
-    $('#cd-balanceCh').textContent=j.channel?'渠道：'+j.channel:'';
+    let v=j.total_remain!=null?j.total_remain:(j.balance!=null?j.balance:null);
+    let unit=j.unit||'';
+// 基准币种合计取不到（没有对应汇率）时退回按币种的合计，卡片不留在空白状态
+    if(v==null && j.totals_by_unit){
+      const parts=Object.keys(j.totals_by_unit).map(u=>j.totals_by_unit[u]+(u?' '+u:''));
+      if(parts.length){ v=parts.join(' · '); unit=''; }
+    }
+    $('#cd-balance').textContent=v!=null?(v+(unit?' '+unit:'')):'-';
+    const okCh=(j.channels||[]).filter(c=>c.ok).map(c=>c.channel);
+    $('#cd-balanceCh').textContent=j.aggregate?('渠道：'+(okCh.join('、')||'查询失败')):(j.channel?'渠道：'+j.channel:'');
   }catch(e){ $('#cd-balance').textContent='-'; $('#cd-balanceCh').textContent=e.message; }
 }
 
 // ============ 渲染：用户资料 ============
 function renderProfile(){
   const me=Store.me; if(!me) return;
+  // 我的资料（可编辑）
+  const up=me.userProfile||{};
+  const mav=$('#pf-myAvatar');
+  if(up.avatar){ mav.src=up.avatar; mav.hidden=false; mav.onerror=()=>{ mav.hidden=true; }; }
+  else { mav.hidden=true; mav.removeAttribute('src'); }
+  $('#pf-myName').textContent=me.name||'（未命名卡）';
+  $('#pf-myRole').textContent=me.role==='admin'?'管理员卡':'用户卡';
+  $('#pf-myBio').textContent=up.bio||'尚未填写简介。';
+  // 卡密信息（只读）
   $('#pf-name').textContent=me.name||'（未命名卡）';
   $('#pf-role').textContent=me.role==='admin'?'管理员卡':'用户卡';
   $('#pf-uid').textContent=me.uid||'-';
@@ -471,6 +548,51 @@ function renderProfile(){
   $('#pf-adminName').textContent=ap.name||'未设置';
   $('#pf-adminBio').textContent=ap.profile||'管理员尚未填写简介。';
   $('#pf-adminOther').textContent=ap.other||'';
+}
+
+// 编辑我的资料：头像 URL（可留空）+ 简介；保存后写回卡对象并刷新本页
+function openProfileEdit(){
+  const me=Store.me||{}, up=me.userProfile||{};
+  openDialog('编辑资料', `<div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
+    <md-outlined-text-field data-f="avatar" label="头像图片地址（https://…，留空为不设置）" value="${escAttr(up.avatar||'')}"></md-outlined-text-field>
+    <md-outlined-text-field data-f="bio" label="简介（500 字以内）" type="textarea" rows="3" value="${escAttr(up.bio||'')}"></md-outlined-text-field>
+    <div style="font-size:10px;color:var(--md-sys-color-on-surface-variant)">昵称（${esc(me.name||'未命名卡')}）由管理员设定，如需修改请联系管理员。</div>
+  </div>`, {okText:'保存', onOk:async()=>{
+    const v=dlgValue();
+    const avatar=String(v.avatar||'').trim();
+    if(avatar && !/^https:\/\//i.test(avatar)){ snack('头像必须是 https:// 开头的图片地址',true); return false; }
+    try{
+      const r=await fetch('/v1/me/profile',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+cardKey},body:JSON.stringify({avatar,bio:String(v.bio||'')})});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error((j&&j.error&&(j.error.message||j.error))||('HTTP '+r.status));
+      Store.me.userProfile=j.userProfile||{avatar,bio:String(v.bio||'')};
+      renderProfile(); snack('资料已保存');
+    }catch(e){ snack(e.message,true); return false; }
+  }});
+}
+
+// ============ 站点品牌（公开，/v1/site）============
+// Logo 与简介是站点门面，登录前就该可见，所以走无卡密的公开接口；卡密相关接口仍在登录后才发。
+async function loadSite(){
+  try{
+    const r=await fetch('/v1/site');
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) return;
+    const name=String(j.name||'').trim(), ver=String(j.ver||'').trim(), logo=String(j.logo||''), intro=String(j.intro||'').trim();
+    const bn=$('#brandName'), bv=$('#brandVer');
+    if(bn) bn.textContent=name||'OpenAGW';
+    if(bv){ bv.textContent=ver||'用户端 · Material Web'; }
+    const sn=$('#ov-site-name'), sv=$('#ov-site-ver'), si=$('#ov-site-intro');
+    if(sn) sn.textContent=name||'OpenAGW';
+    if(sv){ sv.textContent=ver||'用户端 · Material Web'; sv.style.display=ver?'':'none'; }
+    if(si) si.innerHTML=(intro?intro.split('\n').map(x=>`<div>${esc(x)}</div>`).join(''):'')||'<div>OpenAI / Claude / Gemini 三方言互转的统一网关；使用管理员分发的卡密调用 <b>/v1</b> 接口，额度与权限按卡计算。</div>';
+    ['#railLogo','#topLogo','#ov-site-logo'].forEach(sel=>{
+      const img=$(sel); if(!img) return;
+      if(logo){ img.src=logo; img.hidden=false; img.onerror=()=>{ img.hidden=true; }; }
+      else { img.hidden=true; img.removeAttribute('src'); }
+    });
+    if(name||ver) document.title=(name||'OpenAGW')+(ver?' · '+ver:' 用户端');
+  }catch(_){}
 }
 
 // ============ 登录 / 启动 ============
@@ -523,7 +645,7 @@ function logout(){
 async function refreshMe(){
   try{
     Store.me=await api('/v1/me');
-    const R={home:renderHome,card:renderCard,profile:renderProfile};
+    const R={home:renderHome,card:renderCard,models:renderModels,announce:renderAnnounce,profile:renderProfile};
     await R[Store.page]?.();
     snack('已刷新');
   }catch(e){
@@ -540,11 +662,30 @@ $('#thBtn').addEventListener('click',openThemeDialog);
 $('#bgBtn').addEventListener('click',openBgDialog);
 $('#logoutBtn').addEventListener('click',logout);
 $('#refreshBtn').addEventListener('click',refreshMe);
-$('#instSel').addEventListener('change',e=>{ Store.inst=e.target.value; renderModels(); });
+$('#instSel').addEventListener('change',e=>{ Store.inst=e.target.value; if(Store.page==='models') renderModels(); });
 $('#bal-refresh').addEventListener('click',renderBalance);
+$('#pf-edit').addEventListener('click',openProfileEdit);
 $('#railList').addEventListener('click',e=>{
   const nav=e.target.closest('[data-page]');
   if(nav){ go(nav.dataset.page); setRail(false); }
+});
+document.body.addEventListener('click',e=>{
+  const jump=e.target.closest('[data-goto]');
+  if(jump){ go(jump.dataset.goto); return; }
+  const act=e.target.closest('[data-action]');
+  if(!act) return;
+  const a=act.dataset.action, n=act.dataset.name;
+  if(a==='mdGroup'){ openModelGroup(+n); }
+  else if(a==='anView'){ openAnnounceView(anItems.find(x=>x.id===n)); }
+});
+document.body.addEventListener('keydown',e=>{
+  if(e.key!=='Enter'&&e.key!==' ') return;
+  const act=e.target.closest('[data-action]');
+  if(!act) return;
+  e.preventDefault();
+  const a=act.dataset.action, n=act.dataset.name;
+  if(a==='mdGroup'){ openModelGroup(+n); }
+  else if(a==='anView'){ openAnnounceView(anItems.find(x=>x.id===n)); }
 });
 window.addEventListener('online',()=>{ Store.online=true; });
 window.addEventListener('offline',()=>{ Store.online=false; snack('网络已断开',true); });
@@ -555,6 +696,7 @@ try{ setRail(localStorage.getItem('agw-rail')==='open', false); }catch(_){ setRa
 buildNav();
 syncNav(true);
 if(!MW_OK){ /* 组件缺失时 compatBar 已提示，页面结构仍可查看 */ }
+loadSite();
 const saved=localStorage.getItem(KEY_STORE)||'';
 if(saved) login(saved); else showLogin();
 console.log('[OpenAGW] 用户端已初始化 · 组件库', MW_OK?'就绪':'缺失');
