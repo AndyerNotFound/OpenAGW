@@ -46,6 +46,8 @@ function fakeUpstream() {
       if (req.url.startsWith('/user/balance')) return send({ balance_infos: [{ currency: 'CNY', total_balance: '88.80' }] });
       if (req.url.startsWith('/v2/user/info')) return send({ data: { balance: '10' } }); // USD 口径(供汇率折算用例)
       if (req.url.startsWith('/v3/user/info')) return send({ data: { balance: null } }); // 上游明确指出没有余额
+      if (req.url.startsWith('/v4/slow')) return setTimeout(() => send({ data: { balance: '1' } }), 2500); // 慢上游
+      if (req.url.startsWith('/v5/hang')) return; // 挂住不回(模拟卡死的上游)
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: { message: 'unknown ' + req.url } }));
     });
@@ -240,6 +242,36 @@ function readCfg(file) {
   eq(U.balanceNumber(''), null, 'balanceNumber: 空串 → null');
   eq(U.balanceNumber('12.5'), 12.5, 'balanceNumber: 数值串 → 数值');
   eq(U.balanceNumber(0), 0, 'balanceNumber: 0 仍是 0');
+// 上游卡住或挂掉：先把上次成功的数值给出去（标 stale），后台再刷新，客户端不会空着等超时
+  const cfzStale = { responseTimeout: 3000, connectTimeout: 3000, proxies: {}, _name: 'stale', balanceCacheSec: 0 };
+  const upStale = await fakeUpstream();
+  const chStale = { name: 'stale-relay', type: 'openai', baseUrl: `http://127.0.0.1:${upStale.port}`, apiKey: 'sk-up', balanceUrl: '/v1/user/info', balancePath: 'data.balance', balanceUnit: 'CNY' };
+  const rStale1 = await new Promise(r => G.fetchBalanceCached(cfzStale, chStale, r));
+  eq(rStale1.ok, true, 'stale: 首次查询走上游, 成功');
+  ok(!rStale1.stale, 'stale: 首次结果不标 stale');
+  upStale.close();
+  const rStale2 = await new Promise(r => G.fetchBalanceCached(cfzStale, chStale, r));
+  eq(String(rStale2.balance), '42.50', 'stale: 上游断掉后仍返回上次的数值');
+  eq(rStale2.stale, true, 'stale: 结果标 stale');
+  ok(typeof rStale2.last_ok_at === 'string' && rStale2.last_ok_at.length > 10, 'stale: 带上次成功时间');
+  const aggStale = await new Promise(r => G.balanceAggregate({ ...cfzStale, channels: [chStale] }, null, r));
+  eq(String(aggStale.total_remain), '42.5', 'stale: 聚合用上次数值给出合计');
+  ok((aggStale.stale_channels || []).includes('stale-relay'), 'stale: 聚合报告 stale_channels');
+// 渠道级超时: 慢上游到点即放弃, 不再拖满实例级默认值
+  const tSlow = Date.now();
+  const slowCfg = { connectTimeout: 3000, proxies: {}, _name: 'slow', balanceTimeoutSec: 5 };
+  const rSlow = await new Promise(r => G.fetchBalanceCached(slowCfg,
+    { name: 'slow-relay', type: 'openai', baseUrl: `http://127.0.0.1:${up.port}`, apiKey: 'sk-up', balanceUrl: '/v4/slow', balancePath: 'data.balance', balanceUnit: 'CNY', balanceTimeoutSec: 1 }, r));
+  eq(rSlow.status, 504, '渠道级 balanceTimeoutSec 生效: 1s 放弃慢上游');
+  ok(Date.now() - tSlow < 2400, '慢上游按渠道级超时返回, 不等 5s');
+// 失败退避: 刚挂住的渠道在缓存窗口内不再让每次轮询陪着等
+  const boCfg = { connectTimeout: 3000, proxies: {}, _name: 'backoff', balanceTimeoutSec: 1, balanceCacheSec: 30 };
+  const hangCh = { name: 'hang-relay', type: 'openai', baseUrl: `http://127.0.0.1:${up.port}`, apiKey: 'sk-up', balanceUrl: '/v5/hang', balancePath: 'data.balance', balanceUnit: 'CNY' };
+  const rHang1 = await new Promise(r => G.fetchBalanceCached(boCfg, hangCh, r));
+  eq(rHang1.status, 504, '失败退避: 首次挂住 → 504');
+  const tHang = Date.now();
+  const rHang2 = await new Promise(r => G.fetchBalanceCached(boCfg, hangCh, r));
+  ok(!rHang2.ok && Date.now() - tHang < 100, '失败退避: 缓存窗口内再查不再等上游');
 // The key card whitelist constrains aggregation too
   const aggWl = await get(gwFx.port, '/v1/credits', { Authorization: 'Bearer sk-card-one' });
   eq(aggWl.json && aggWl.json.channels && aggWl.json.channels.length, 1, '聚合: 绑定卡只见白名单渠道');

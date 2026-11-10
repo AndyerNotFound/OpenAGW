@@ -128,7 +128,8 @@ function fetchChannelBalance(cfg, ch, cb) {
     let url;
     try { url = resolveBalanceUrl(ch, t); } catch (e) { return fin({ ok: false, status: 400, error: e.message }); }
     try { new URL(url); } catch (e) { return fin({ ok: false, status: 400, error: '余额接口地址无效: ' + url }); }
-    const sub = { ...cfg, responseTimeout: Math.max(1000, (Number(cfg.balanceTimeoutSec) || 15) * 1000) };
+    const timeoutSec = Number(ch.balanceTimeoutSec) || Number(cfg.balanceTimeoutSec) || 20;
+    const sub = { ...cfg, responseTimeout: Math.max(1000, timeoutSec * 1000) };
     upstreamRequest(sub, ch, url, balanceAuthHeaders(ch), null, (err, upRes) => {
       if (err) return fin({ ok: false, status: /timeout/i.test(err.message) ? 504 : 502, error: '余额查询失败: ' + err.message });
       const chunks = [];
@@ -163,8 +164,21 @@ function fetchChannelBalance(cfg, ch, cb) {
     fin({ ok: false, status: 500, error: '余额查询异常: ' + e.message });
   }
 }
-// Client endpoints: a short cache (default 30s) absorbs client polling; only successful results are cached
+/* Client endpoints: a short cache (default 30s) absorbs client polling; only successful results are cached.
+ * A relay that refreshes its own credits for tens of seconds used to leave the caller with nothing at all:
+ * the request waited out balanceTimeoutSec and the answer was an error. The last successful value is kept
+ * separately and served immediately (marked stale) while the refresh runs behind it, so a polling client
+ * always has a number to show and a stalled channel costs it no waiting time. */
 const _balanceCache = new Map();
+const _balanceLast = new Map();
+const _balanceInflight = new Set();
+const _balanceFail = new Map();
+const BALANCE_STALE_MS = 3600 * 1000;
+function trimCache(m) {
+  if (m.size <= 256) return;
+  const it = m.keys();
+  for (let i = 0; i < 64; i++) { const k = it.next(); if (k.done) break; m.delete(k.value); }
+}
 function balanceCacheTtl(cfg) {
   const v = Number(cfg.balanceCacheSec);
   return isFinite(v) && v >= 0 ? v : 30;
@@ -176,17 +190,35 @@ function balanceCacheKey(cfg, ch) {
 function fetchBalanceCached(cfg, ch, cb) {
   const ttl = balanceCacheTtl(cfg);
   const key = balanceCacheKey(cfg, ch);
+  const now = Date.now();
   if (ttl > 0) {
     const hit = _balanceCache.get(key);
-    if (hit && Date.now() - hit.at < ttl * 1000) return cb(hit.res, true);
+    if (hit && now - hit.at < ttl * 1000) return cb(hit.res, true);
   }
-  fetchChannelBalance(cfg, ch, (r) => {
-    if (ttl > 0 && r.ok) {
-      _balanceCache.set(key, { at: Date.now(), res: r });
-      if (_balanceCache.size > 256) { const it = _balanceCache.keys(); for (let i = 0; i < 64; i++) { const k = it.next(); if (k.done) break; _balanceCache.delete(k.value); } }
-    }
-    cb(r, false);
-  });
+  const last = _balanceLast.get(key);
+  const stale = (last && now - last.at < BALANCE_STALE_MS)
+    ? { ...last.res, stale: true, last_ok_at: new Date(last.at).toISOString() }
+    : null;
+  const fail = _balanceFail.get(key);
+  if (!stale && fail && now - fail.at < Math.max(ttl, 15) * 1000) return cb(fail.res, false);
+  const refresh = (done) => {
+    if (_balanceInflight.has(key)) return;   // one refresh per channel at a time
+    _balanceInflight.add(key);
+    fetchChannelBalance(cfg, ch, (r) => {
+      _balanceInflight.delete(key);
+      if (r.ok) {
+        const at = Date.now();
+        _balanceFail.delete(key);
+        if (ttl > 0) { _balanceCache.set(key, { at, res: r }); trimCache(_balanceCache); }
+        _balanceLast.set(key, { at, res: r }); trimCache(_balanceLast);
+      } else {
+        _balanceFail.set(key, { at: Date.now(), res: r }); trimCache(_balanceFail);
+      }
+      if (done) done(r, false);
+    });
+  };
+  if (stale) { refresh(null); return cb(stale, true); }
+  refresh(cb);
 }
 // Client endpoint channel pick: card channels whitelist (filters only when set) -> balance-target channels first -> default first
 function balanceChannelList(cfg, uk) {
@@ -222,6 +254,7 @@ function balanceAggregate(cfg, uk, cb) {
     let sum = 0, anyRate = false, partial = false, okCount = 0;
     const noRateUnits = [];
     const byUnit = {};
+    const staleNames = [];
     const failed = [];
     const channels = all.map((c, i) => {
       const r = results[i];
@@ -236,6 +269,7 @@ function balanceAggregate(cfg, uk, cb) {
       const unit = r.unit || '';
       const rate = balanceFxRate(cfg, unit);
       const item = { channel: c.name, ok: true, total_remain: v, unit };
+      if (r.stale) { item.stale = true; item.last_ok_at = r.last_ok_at; staleNames.push(c.name); }
       if (v == null) {
         item.no_value = true; partial = true;
         return item;
@@ -257,9 +291,11 @@ function balanceAggregate(cfg, uk, cb) {
     log('[balance] 聚合', '实例=' + (cfg._name || 'default'), '渠道=' + all.length, 'ok=' + okCount, 'base=' + base,
       'total=' + total, partial ? '(partial)' : '',
       breakdown ? '按币种=' + JSON.stringify(breakdown) : '',
+      staleNames.length ? '缓存值: ' + staleNames.join('、') : '',
       failed.length ? '失败: ' + failed.join('; ') : '');
     cb({ ok: true, aggregate: true, total_remain: total, unit: base, channels, partial, ok_count: okCount,
       ...(breakdown ? { totals_by_unit: breakdown } : {}),
+      ...(staleNames.length ? { stale_channels: staleNames } : {}),
       ...(noRateUnits.length ? { unconverted_units: noRateUnits } : {}) });
   };
   all.forEach((c, i) => {

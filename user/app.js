@@ -520,7 +520,8 @@ async function renderBalance(){
     }
     $('#cd-balance').textContent=v!=null?(v+(unit?' '+unit:'')):'-';
     const okCh=(j.channels||[]).filter(c=>c.ok).map(c=>c.channel);
-    $('#cd-balanceCh').textContent=j.aggregate?('渠道：'+(okCh.join('、')||'查询失败')):(j.channel?'渠道：'+j.channel:'');
+    const stale=!!(j.stale || (j.stale_channels&&j.stale_channels.length));
+    $('#cd-balanceCh').textContent=(j.aggregate?('渠道：'+(okCh.join('、')||'查询失败')):(j.channel?'渠道：'+j.channel:''))+(stale?'（含上次结果）':'');
   }catch(e){ $('#cd-balance').textContent='-'; $('#cd-balanceCh').textContent=e.message; }
 }
 

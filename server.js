@@ -295,12 +295,13 @@ function collectBody(req, maxBytes) {
         log('UPERR', '[balance]', ch.name, (isGrants ? 'credit_grants' : 'subscription'), 'status=' + (r.status || 502), r.error || '');
         return sendError('openai', res, r.status || 502, r.error || 'balance query failed');
       }
-      log('[balance]', ch.name, (isGrants ? 'credit_grants' : 'subscription'), 'channel=' + ch.name, 'unit=' + (r.unit || '-'), 'ms=' + (Date.now() - t0) + (cached ? ' (cached)' : ''));
+      log('[balance]', ch.name, (isGrants ? 'credit_grants' : 'subscription'), 'channel=' + ch.name, 'unit=' + (r.unit || '-'), 'ms=' + (Date.now() - t0) + (r.stale ? ' (stale ' + (r.last_ok_at || '') + ')' : cached ? ' (cached)' : ''));
       const avail = balanceNumber(r.balance);
-      const common = { channel: ch.name, balance: r.balance, unit: r.unit || '', upstream_url: r.url };
+      const staleInfo = r.stale ? { stale: true, last_ok_at: r.last_ok_at } : {};
+      const common = { channel: ch.name, balance: r.balance, unit: r.unit || '', upstream_url: r.url, ...staleInfo };
 // Generic balance shape: compatible with any client's "balance path + JSON key" config (provides total_remain / balance / remaining / total_available)
       if (GENERIC_BALANCE_PATHS.has(p)) {
-        const generic = { total_remain: avail, balance: r.balance, total_available: avail, total_granted: avail, total_used: 0, remaining: avail, unit: r.unit || '', channel: ch.name };
+        const generic = { total_remain: avail, balance: r.balance, total_available: avail, total_granted: avail, total_used: 0, remaining: avail, unit: r.unit || '', channel: ch.name, ...staleInfo };
         return sendJson(res, 200, { ...generic, data: { ...generic, upstream_url: r.url } });
       }
       if (isGrants) return sendJson(res, 200, { object: 'credit_summary', total_granted: avail, total_used: 0, total_available: avail, grants: { object: 'list', data: [] }, ...common });
