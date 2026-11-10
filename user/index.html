@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#141218">
+<title>OpenAGW 用户端</title>
+<style>
+:root{color-scheme:dark;--bg:#141218;--card:#1d1b20;--line:#2b2830;--txt:#e6e0e9;--dim:#a79fb0;--pri:#d0bcff;--err:#f2b8b5}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--txt);font:14px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:20px;max-width:640px;margin:0 auto}
+h1{font-size:18px;margin-bottom:4px}
+.sub{color:var(--dim);font-size:12px;margin-bottom:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:12px}
+label{display:block;font-size:12px;color:var(--dim);margin-bottom:4px}
+input{width:100%;background:#26232b;border:1px solid var(--line);border-radius:10px;color:var(--txt);padding:10px 12px;font:inherit;outline:none}
+input:focus{border-color:var(--pri)}
+button{background:var(--pri);color:#381e72;border:0;border-radius:999px;padding:10px 22px;font:inherit;font-weight:600;cursor:pointer;margin-top:10px}
+button.ghost{background:transparent;color:var(--pri);border:1px solid var(--line)}
+.row{display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px}
+.row:last-child{border-bottom:0}
+.k{color:var(--dim)}
+.v{text-align:right;word-break:break-all}
+.bar{height:6px;background:#26232b;border-radius:3px;overflow:hidden;margin-top:6px}
+.bar i{display:block;height:100%;background:var(--pri);border-radius:3px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chip{background:#26232b;border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:12px}
+.err{color:var(--err);font-size:12px;margin-top:8px;min-height:1em}
+.muted{color:var(--dim);font-size:12px}
+.head{display:flex;justify-content:space-between;align-items:center}
+select{background:#26232b;border:1px solid var(--line);border-radius:10px;color:var(--txt);padding:8px 10px;font:inherit}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<h1>OpenAGW 用户端</h1>
+<div class="sub">使用卡密查看额度、有效期、限流与可用模型</div>
+
+<div class="card" id="loginCard">
+  <label for="keyInput">卡密</label>
+  <input id="keyInput" type="password" placeholder="sk-…" autocomplete="off">
+  <div class="err" id="loginErr"></div>
+  <button id="loginBtn">登录</button>
+</div>
+
+<div id="app" class="hidden">
+  <div class="card">
+    <div class="head">
+      <div>
+        <div id="cardName" style="font-weight:600">-</div>
+        <div class="muted" id="cardRole">-</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="instSel" class="hidden"></select>
+        <button class="ghost" id="logoutBtn">退出</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row"><span class="k">额度</span><span class="v" id="quota">-</span></div>
+    <div class="row"><span class="k">已用 / 剩余</span><span class="v" id="used">-</span></div>
+    <div class="bar"><i id="quotaBar" style="width:0%"></i></div>
+    <div class="row" style="margin-top:6px"><span class="k">有效期至</span><span class="v" id="expire">-</span></div>
+    <div class="row"><span class="k">限流（RPM / TPM）</span><span class="v" id="rate">-</span></div>
+  </div>
+
+  <div class="card">
+    <label>可访问实例</label>
+    <div class="chips" id="branches"></div>
+  </div>
+
+  <div class="card">
+    <label>可用模型（当前实例）</label>
+    <div class="chips" id="models"></div>
+  </div>
+
+  <div class="card">
+    <label>上游余额</label>
+    <div class="row"><span class="k">余额</span><span class="v" id="balance">-</span></div>
+    <div class="muted" id="balanceCh"></div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const fmt = n => (n == null ? '-' : Number(n).toLocaleString());
+const KEY = 'agw-user-key';
+let cardKey = localStorage.getItem(KEY) || '';
+let inst = '';
+
+async function api(path, key) {
+  const r = await fetch(path, { headers: key ? { Authorization: 'Bearer ' + key } : {} });
+  let j = null;
+  try { j = await r.json(); } catch (_) {}
+  if (!r.ok) throw new Error((j && j.error && (j.error.message || j.error)) || ('HTTP ' + r.status));
+  return j;
+}
+
+async function loadModels() {
+  try {
+    const base = inst && inst !== 'default' ? '/' + encodeURIComponent(inst) : '';
+    const j = await api(base + '/v1/models', cardKey);
+    const ids = ((j && j.data) || []).map(m => m.id);
+    $('#models').innerHTML = ids.length ? ids.map(m => '<span class="chip">' + m + '</span>').join('') : '<span class="muted">无可用模型</span>';
+  } catch (e) { $('#models').innerHTML = '<span class="muted">加载失败：' + e.message + '</span>'; }
+}
+
+async function loadBalance() {
+  try {
+    const base = inst && inst !== 'default' ? '/' + encodeURIComponent(inst) : '';
+    const j = await api(base + '/v1/credits', cardKey);
+    const v = j.total_remain != null ? j.total_remain : j.balance;
+    $('#balance').textContent = v != null ? (v + (j.unit ? ' ' + j.unit : '')) : '-';
+    $('#balanceCh').textContent = j.channel ? '渠道：' + j.channel : '';
+  } catch (e) { $('#balance').textContent = '-'; $('#balanceCh').textContent = e.message; }
+}
+
+async function loadMe() {
+  const me = await api('/v1/me', cardKey);
+  $('#cardName').textContent = me.name || '（未命名卡）';
+  $('#cardRole').textContent = me.role === 'admin' ? '管理员卡' : '用户卡';
+  $('#quota').textContent = me.unlimited ? '不限' : fmt(me.quotaTokens) + ' tokens';
+  $('#used').textContent = fmt(me.usedTokens) + (me.remainingTokens != null ? ' / ' + fmt(me.remainingTokens) : ' / -');
+  const pct = (!me.unlimited && me.quotaTokens > 0) ? Math.min(100, Math.round(me.usedTokens / me.quotaTokens * 100)) : 0;
+  $('#quotaBar').style.width = pct + '%';
+  $('#expire').textContent = me.expiresAt || '长期有效';
+  $('#rate').textContent = (me.rpm ? me.rpm + ' RPM' : '不限 RPM') + ' / ' + (me.tpm ? fmt(me.tpm) + ' TPM' : '不限 TPM');
+  const bs = me.branches || [];
+  $('#branches').innerHTML = bs.length ? bs.map(b => '<span class="chip">' + b + '</span>').join('') : '<span class="muted">仅当前实例</span>';
+  const sel = $('#instSel');
+  if (bs.length > 1) {
+    sel.innerHTML = bs.map(b => '<option value="' + b + '"' + (b === inst ? ' selected' : '') + '>' + b + '</option>').join('');
+    sel.classList.remove('hidden');
+  } else sel.classList.add('hidden');
+  if (!inst || !bs.includes(inst)) inst = bs[0] || 'default';
+  sel.value = inst;
+  loadModels();
+  loadBalance();
+}
+
+async function login(key) {
+  $('#loginErr').textContent = '';
+  try {
+    await api('/v1/me', key);
+    cardKey = key;
+    localStorage.setItem(KEY, key);
+    inst = '';
+    $('#loginCard').classList.add('hidden');
+    $('#app').classList.remove('hidden');
+    loadMe().catch(e => { $('#models').innerHTML = '<span class="muted">' + e.message + '</span>'; });
+  } catch (e) {
+    $('#loginErr').textContent = e.message;
+    localStorage.removeItem(KEY);
+  }
+}
+
+$('#loginBtn').onclick = () => { const k = $('#keyInput').value.trim(); if (k) login(k); };
+$('#keyInput').addEventListener('keydown', e => { if (e.key === 'Enter') $('#loginBtn').click(); });
+$('#logoutBtn').onclick = () => { localStorage.removeItem(KEY); location.reload(); };
+$('#instSel').onchange = e => { inst = e.target.value; loadModels(); loadBalance(); };
+
+if (cardKey) { $('#keyInput').value = cardKey; login(cardKey); }
+</script>
+</body>
+</html>

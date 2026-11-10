@@ -128,7 +128,7 @@ class IntentGuard {
 
     /* a card limited to certain instances must not replay its intent on another one */
     if (keyRecord && !permissions.allowsBranch(keyRecord, this.inst)) {
-      return { ok: false, status: 403, error: '此卡密未授权访问实例: ' + this.inst + ' (实例权限: ' + (permissions.list(keyRecord.branches).join(', ') || '仅发卡实例') + ')' };
+      return { ok: false, status: 403, error: '此卡密未授权访问实例: ' + this.inst + ' (实例权限: ' + (permissions.list(keyRecord.branches).join(', ') || '全部') + ')' };
     }
 
     /* idempotency: only a properly signed duplicate gets the cached response */

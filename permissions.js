@@ -5,9 +5,9 @@
  *   channels  allowed providers (channel names)
  *   branches  allowed instances
  *   rpm/tpm   requests / tokens per rolling minute; 0 or absent = unlimited
- * A whitelist accepts '*' wildcards. An empty models/channels list means "no restriction"
- * (the historical card behavior). An empty branches list means the issuing instance only --
- * cross-instance access always has to be granted explicitly.
+ * A whitelist accepts '*' wildcards. An empty list means "no restriction" for all three
+ * scopes -- an unrestricted card reaches every instance, provider and model. To confine a
+ * card to its issuing instance, grant only that instance explicitly.
  */
 function list(v) {
   return Array.isArray(v) ? v.map(x => String(x == null ? '' : x).trim()).filter(Boolean) : [];

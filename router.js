@@ -239,14 +239,11 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
   req.on('end', () => { let j; try { j = JSON.parse(body || '{}'); } catch (_) { return sendError('openai', res, 400, 'bad json'); } cb(j); });
   req.on('error', () => {});
 }
-// Instances a key card may reach. An empty whitelist means "the issuing instance only" -- crossing
-// into another instance is always an explicit grant, never an accident. Wildcards are accepted.
+// Instances a key card may reach. An empty whitelist means "no restriction" -- the card can
+// use every instance; a non-empty list confines it to the ones granted. Wildcards are accepted.
 function availableBranches(cfg, userKey) {
   const all = state.CUR_POOL ? [...state.CUR_POOL.instances.keys()].filter(n => { const c = state.CUR_POOL.instances.get(n); return c && !c._disabled; }) : [cfg._name || 'default'];
   if (!userKey) return all; // admin/keyless: everything
-  const own = cfg._name || 'default';
-  const wl = permissions.list(userKey.branches);
-  if (!wl.length) return all.includes(own) ? [own] : [];
   return all.filter(n => permissions.allowsBranch(userKey, n));
 }
 
@@ -308,9 +305,8 @@ function findCrossInstanceKey(cfg, token) {
     if (!uk) continue;
     const err = keyCardError(uk);
     if (err) return { error: err };
-    const wl = permissions.list(uk.branches);
-    if (!wl.length || !permissions.allowsBranch(uk, target)) {
-      denied = { status: 403, error: '此卡密未授权访问实例: ' + target + ' (实例权限: ' + (wl.join(', ') || '仅发卡实例') + ')' };
+    if (!permissions.allowsBranch(uk, target)) {
+      denied = { status: 403, error: '此卡密未授权访问实例: ' + target + ' (实例权限: ' + (permissions.list(uk.branches).join(', ') || '全部') + ')' };
       continue;
     }
     return { userKey: uk, keyOwner: c };
@@ -330,7 +326,7 @@ function checkAuth(cfg, req, query, opts) {
   const branchError = (uk) => {
     if (opts && opts.anyBranch) return null;
     if (permissions.allowsBranch(uk, own)) return null;
-    return { status: 403, error: '此卡密未授权访问实例: ' + own + ' (实例权限: ' + (permissions.list(uk.branches).join(', ') || '仅发卡实例') + ')' };
+    return { status: 403, error: '此卡密未授权访问实例: ' + own + ' (实例权限: ' + (permissions.list(uk.branches).join(', ') || '全部') + ')' };
   };
   if (presented) {
     const uk = keys.find(k => k.key && k.key === presented);

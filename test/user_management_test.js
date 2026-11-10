@@ -139,7 +139,7 @@ function freePort() {
   r = await request(port, '/v1/branches', { authorization: 'Bearer sk-branch' });
   ok(r.status === 200 && JSON.parse(r.body).branches.length === 0, '分支列表对不可达实例为空');
   r = await request(port, '/v1/branches', { authorization: 'Bearer sk-open' });
-  ok(r.status === 200 && JSON.parse(r.body).branches.includes('default'), '无限制卡可列出 default 实例');
+  ok(r.status === 200 && JSON.parse(r.body).branches.includes('default'), '不限实例的卡可列出 default 实例');
 
   // ---- RPM ----
   r = await chat(port, 'sk-rpm', 'm1');
@@ -166,9 +166,9 @@ function freePort() {
   r = await chat(port, 'sk-quota', 'm1');
   ok(r.status === 429 && r.body.includes('额度已用尽'), '额度用尽卡被拒 429 (got ' + r.status + ')');
 
-  // ---- admin role cannot chat ----
+  // ---- admin role can also chat (same card rights as user) ----
   r = await chat(port, 'sk-admin', 'm1');
-  ok(r.status === 403, '管理卡不能聊天 (got ' + r.status + ')');
+  ok(r.status === 200, '管理卡也可聊天 (got ' + r.status + ')');
 
   // ---- admin CRUD ----
   r = await request(port, '/admin/api/keys/default', admin);
@@ -250,13 +250,13 @@ function freePort() {
   r = await request(p1, '/second/v1/chat/completions',
     { 'Content-Type': 'application/json', authorization: 'Bearer sk-all' }, 'POST',
     JSON.stringify({ model: 'x1', messages: [{ role: 'user', content: 'hi' }] }));
-  ok(r.status === 403, '未勾选实例权限的卡不能跨实例 (got ' + r.status + ')');
+  ok(r.status === 200, '不限实例的卡可跨实例 (got ' + r.status + ')');
   r = await request(p1, '/v1/branches', { authorization: 'Bearer sk-cross' });
   const brs = JSON.parse(r.body).branches || [];
   ok(brs.includes('default') && brs.includes('second'), '实例列表回传全部已授权实例 (got ' + brs.join(',') + ')');
   r = await request(p1, '/v1/branches', { authorization: 'Bearer sk-all' });
   const brs2 = JSON.parse(r.body).branches || [];
-  ok(brs2.join(',') === 'default', '未勾选实例权限时只回传发卡实例 (got ' + brs2.join(',') + ')');
+  ok(brs2.includes('default') && brs2.includes('second'), '不限实例的卡回传全部实例 (got ' + brs2.join(',') + ')');
   r = await request(p1, '/second/v1/chat/completions',
     { 'Content-Type': 'application/json', authorization: 'Bearer sk-second' }, 'POST',
     JSON.stringify({ model: 'x1', messages: [{ role: 'user', content: 'hi' }] }));

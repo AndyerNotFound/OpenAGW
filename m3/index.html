@@ -31,7 +31,6 @@
     <md-outlined-select id="topInst" label="当前管理实例"></md-outlined-select>
     <div class="rail-acts">
       <md-outlined-icon-button id="refreshBtn" aria-label="刷新" title="刷新"><md-icon>refresh</md-icon></md-outlined-icon-button>
-      <md-outlined-icon-button id="keyBtn" aria-label="管理密码" title="管理密码"><md-icon>key</md-icon></md-outlined-icon-button>
       <md-outlined-icon-button id="thBtn" aria-label="主题" title="主题"><md-icon>palette</md-icon></md-outlined-icon-button>
       <md-outlined-icon-button id="bgBtn" aria-label="背景" title="背景"><md-icon>wallpaper</md-icon></md-outlined-icon-button>
     </div>
@@ -274,9 +273,6 @@
     <section id="page-keys" class="page hidden" hidden>
       <md-filled-card>
         <div class="card-head"><div><div class="card-title">API 密钥</div><div class="card-sub">网关密码与渠道密钥</div></div></div>
-        <div class="grid-form" style="margin-bottom:8px">
-          <md-outlined-text-field id="ky-webToken" label="管理 API 令牌（webToken，可选）" type="password" helper="面板登录无需填写；脚本或 API 调用可选用；留空表示由本机 CLI 直接管理"></md-outlined-text-field>
-        </div>
         <div id="ky-channels" class="list-gap" style="margin-bottom:8px"></div>
         <md-filled-button id="ky-save">保存密钥</md-filled-button>
       </md-filled-card>
@@ -344,7 +340,6 @@
           <span class="mono" id="tn-url" style="word-break:break-all;background:var(--md-sys-color-surface-container);padding:4px;border-radius:8px;user-select:all"></span>
           <md-icon-button id="tn-copy" title="复制"><md-icon>content_copy</md-icon></md-icon-button>
         </div>
-        <div class="card-sub" style="margin-top:8px;color:var(--md-sys-color-error)">⚠️ 隧道开启后即公网可访问，务必设置 webToken</div>
       </md-filled-card>
 
       <md-filled-card>
@@ -509,8 +504,8 @@
           <tbody></tbody></table></div>
       </md-filled-card>
       <md-filled-card>
-        <div class="card-head"><div><div class="card-title">定时注销</div><div class="card-sub" id="ss-expire-state">未设定</div></div></div>
-        <div class="grid-form">
+        <div class="card-head" style="margin-bottom:16px"><div><div class="card-title">定时注销</div><div class="card-sub" id="ss-expire-state">未设定</div></div></div>
+        <div class="grid-form" style="margin-bottom:16px">
           <md-outlined-text-field id="ss-expire-at" type="datetime-local" label="注销时间"></md-outlined-text-field>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">

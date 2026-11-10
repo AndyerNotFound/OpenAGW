@@ -78,12 +78,12 @@ class BaseAdapter{
     try{ res = await fetch(url, {...opts, signal}); }
     catch(e){ if(e.name==='AbortError') throw e;
       throw new Error('无法连接到 ' + url.split('/admin/api/')[0] + ' （实例可能未运行或正在重启中）'); }
-if(res.status===401){ // session gone (or a wrong token): the login page is the only re-entry
-  if(!localStorage.getItem('agw-admin-key') && !window.__agwAuthRedirect){
+if(res.status===401){ // session gone: the login page is the only re-entry
+  if(!window.__agwAuthRedirect){
     window.__agwAuthRedirect=true;
     const m=location.pathname.match(/^\/([A-Za-z0-9_-]{16,128})\/admin(?:\/|$)/);
     location.replace((m?'/'+m[1]+'/admin':'')+'/login');
-  } else openKeyDialog();
+  }
 }
     if(!res.ok){
 // Best-effort parse {error:{message}} / {error:"..."} into readable text (balance failures must show why)
@@ -105,7 +105,7 @@ class HttpAdapter extends BaseAdapter{
     const prefix=pm?'/'+pm[1]:''; // base + '/admin/api/...' rebuilds /<sid>/admin/api/...
     this.base=(base||(location.origin+prefix)).replace(/\/$/,'');
   }
-  _hdr(){ const h={'Content-Type':'application/json'}; const k=localStorage.getItem('agw-admin-key'); if(k)h['x-agw-token']=k; return h; }
+  _hdr(){ return {'Content-Type':'application/json'}; }
   async getInstances(signal){ return this._fetch(`${this.base}/admin/api/instances`,{headers:this._hdr()},signal); }
   async getConfig(name,signal){ return this._fetch(`${this.base}/admin/api/config/${encodeURIComponent(name)}?reveal=1`,{headers:this._hdr()},signal); }
   async saveConfig(name,patch,signal){
@@ -789,8 +789,6 @@ async function renderKeys(){
     const cfg=await adapter.getConfig(cur,signal);
 
 
-    $('#ky-webToken').value = cfg.webToken && cfg.webToken!=='(已设)' ? cfg.webToken : '';
-    $('#ky-webToken').placeholder = cfg.webToken==='(已设)' ? '（已设，留空表示不修改）' : '留空表示不启用 API 令牌';
     $('#ky-channels').innerHTML=(cfg.channels||[]).map(ch=>
       `<md-outlined-text-field data-keyfor="${escAttr(ch.name)}" label="${esc(ch.name)} (${esc(ch.type)})" type="password" value="${esc(ch.apiKey||'')}" placeholder="${ch.hasKey?'（已设）':'API Key'}"></md-outlined-text-field>`
     ).join('');
@@ -920,7 +918,7 @@ function cardDialogHtml(k){
         <md-outlined-text-field data-f="tpm" label="TPM（tokens/分钟）" type="number" value="${Number(k&&k.tpm)||0}" helper="0 表示不限；按输入与输出合计"></md-outlined-text-field>
       </div>
       <md-outlined-text-field data-f="expiresAt" label="有效期（留空表示永久）" value="${escAttr(k&&k.expiresAt||'')}" placeholder="2026-12-31" helper="到期后自动拒绝；支持 YYYY-MM-DD"></md-outlined-text-field>
-      <div class="perm-title">实例权限 <span class="perm-hint">不勾选表示仅限发卡实例；跨实例使用需勾选目标实例</span></div>
+      <div class="perm-title">实例权限 <span class="perm-hint">不勾选表示全部实例；勾选后仅可使用所选实例</span></div>
       ${cardPermBox('branches', insts, k&&k.branches)}
       <div class="perm-title">提供商权限 <span class="perm-hint">不勾选表示当前实例的全部提供商</span></div>
       ${cardPermBox('channels', chs, k&&k.channels)}
@@ -973,7 +971,7 @@ async function renderCards(){
       if(k.tpm) now.push('TPM '+fmtTok(k.tpmUsed||0)+'/'+fmtTok(k.tpm));
       const nowTxt=now.length?('本分钟 '+now.join(' · ')):'';
       const perm=[
-        '实例 '+((k.branches&&k.branches.length)?k.branches.join('/'):('仅 '+Store.inst)),
+        '实例 '+((k.branches&&k.branches.length)?k.branches.join('/'):'全部'),
         '提供商 '+((k.channels&&k.channels.length)?k.channels.join('/'):'全部'),
         '模型 '+((k.models&&k.models.length)?k.models.join('/'):'全部'),
       ];
@@ -1457,7 +1455,6 @@ document.body.addEventListener('click', e=>{
 
 let dlgOnOk = null;
 let mmList=[]; // the channel dialog's model rename map [[public name, real name],...]
-let portDlgOrigKey; // the original admin password before dialog backfill (undefined = backfill not done)
 // Drawer-style dialog: opening is pure CSS (dlgRise); closing adds .closing so the sheet slides down
 // (dlgSink) before the overlay is hidden. DLG_CLOSE_MS mirrors the .dlg-overlay.closing duration in app.css.
 const DLG_CLOSE_MS = 200;
@@ -1603,23 +1600,6 @@ function rgbToHsl(r,g,b){
   return {h,s:s*100,l:l*100};
 }
 
-// ---- Optional admin API token input: top-bar key button, auto-opens on API 401 ----
-function keyDlgVisible(){ return !$('#dlgOverlay').hidden && $('#dlgTitle').textContent==='管理令牌'; }
-function openKeyDialog(){
-  if(keyDlgVisible()) return;
-  openDialog('管理令牌', `
-    <div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
-      <md-outlined-text-field data-f="key" label="管理 API 令牌（可选）" type="password" value="${escAttr(localStorage.getItem('agw-admin-key')||'')}"
-        helper="面板登录请使用 agw web login 生成的一次性链接；此处仅用于脚本/API 的 webToken"></md-outlined-text-field>
-    </div>`, {okText:'保存', onOk:saveKey});
-}
-async function saveKey(){
-  const k=String(dlgValue().key||'').trim();
-  if(k) localStorage.setItem('agw-admin-key',k); else localStorage.removeItem('agw-admin-key');
-  snack(k?'令牌已记住，正在刷新…':'已清除已记住的令牌，正在刷新…');
-  setTimeout(()=>location.reload(),600);
-  return true;
-}
 // ---- Model rename tag editor (inside the channel dialog) ----
 function renderMmChips(){
   const box=$('#mmChips'); if(!box) return;
@@ -1788,18 +1768,14 @@ function openPortDialog(name){
     <div style="display:flex;flex-direction:column;gap:8px;padding-top:8px">
       <md-outlined-text-field data-f="name" label="实例名" value="${escAttr(i.name||'')}" ${(name==='default')?'disabled':''} required helper="${name?(name==='default'?'主实例不支持改名':'改名会同步修改配置文件名，热生效'):'仅可包含字母、数字、中划线、下划线'}"></md-outlined-text-field>
       <md-outlined-text-field data-f="port" label="端口" type="number" value="${i.port||16390}" helper="${(i.tlsOn||(name&&name!=='default'))?'启用 HTTPS 的实例仅经主端口访问，此端口仅作标识':'监听端口（启用 HTTPS 后仅提供 https）'}"></md-outlined-text-field>
-      <md-outlined-text-field data-f="webToken" label="访问令牌" type="password" value="" helper="留空保存表示清除访问令牌"></md-outlined-text-field>
       <label style="display:flex;align-items:center;gap:4px;font-size:11px"><md-switch data-f="tls" ${i.tlsOn?'selected':''}></md-switch>启用 HTTPS</label>
       ${(name&&name!=='default'&&name!==Store.currentName)?`<md-text-button data-action="delInstance" data-name="${escAttr(name)}" style="color:var(--md-sys-color-error);align-self:flex-start;margin-top:2px">删除实例</md-text-button>`:''}
     </div>`, {onOk:()=>savePortSettings(name)});
-if(name){ // edit mode: fetch the real config to backfill port/TLS/admin password (revealed in plaintext, WYSIWYG)
-    portDlgOrigKey=undefined;
+if(name){ // edit mode: fetch the real config to backfill port/TLS (WYSIWYG)
     adapter.getConfig(name).then(c=>{
       const q=f=>$('#dlgBody [data-f='+f+']');
       if(q('port')) q('port').value=(c.port!=null?c.port:16384);
       const sw=q('tls'); if(sw) sw.selected=!!(c.tls&&c.tls.enable);
-      portDlgOrigKey=c.webToken||'';
-      if(q('webToken')) q('webToken').value=portDlgOrigKey;
     }).catch(()=>{});
   }
 }
@@ -1810,7 +1786,6 @@ async function savePortSettings(editName){
   const v=dlgValue();
   const name=String(editName||v.name||'').trim();
   const port=Number(v.port);
-  const adminKey=String(v.webToken||'').trim();
   const tlsOn=!!($('#dlgBody [data-f=tls]')&&$('#dlgBody [data-f=tls]').selected);
   if(!/^[A-Za-z0-9_-]{1,32}$/.test(name)){ snack('实例名仅可包含字母、数字、中划线、下划线（最长 32 字符）',true); return false; }
   if(!port||port<1024||port>65535){ snack('HTTP 端口范围 1024-65535',true); return false; }
@@ -1826,8 +1801,6 @@ if(name!==editName){ // ---- rename: call the rename API first (hot), later save
       const patch={ port, host:(cur&&cur.host)||'0.0.0.0',
         tls:Object.assign({},(cur&&cur.tls)||{},{ enable:tlsOn }) };
       delete patch.tls.port;
-      // admin password: submit only when different from the backfilled value (empty = remove it); untouched when backfill failed (unknown)
-      if(portDlgOrigKey!==undefined && adminKey!==portDlgOrigKey) patch.webToken=adminKey;
       await adapter.saveConfig(effName,patch);
       snack('已保存实例 '+effName);
       if(editName===Store.currentName&&cur&&cur.port&&Number(cur.port)!==port)
@@ -1850,7 +1823,7 @@ if(tlsOn){ // reuse an existing instance's certificate (certs can be shared acro
           if(!tls.cert){ tls.enable=false; snack('未找到可用证书，已按纯 HTTP 创建',true); }
         }catch(_){ tls.enable=false; }
       }
-      await adapter.createInstance(name,{ port, host:'0.0.0.0', tls, webToken:adminKey });
+      await adapter.createInstance(name,{ port, host:'0.0.0.0', tls });
       snack('实例 '+name+' 已创建，正在启动…');
       try{ await adapter.action(name,'start'); }catch(_){}
       renderPorts();
@@ -1956,7 +1929,7 @@ if(Object.keys(modelMap).length) ch.modelMap=modelMap; // never send an arrow-le
 }
 async function saveKeys(){
   try{
-    const patch={webToken:$('#ky-webToken').value, channels:{}};
+    const patch={channels:{}};
     $$('#ky-channels [data-keyfor]').forEach(el=>{ patch.channels[el.dataset.keyfor]=el.value; });
     await adapter.saveConfig(Store.inst,patch); snack('密钥已保存'); await renderKeys();
   }catch(e){ snack(e.message,true); }
@@ -2376,21 +2349,11 @@ if(!MW_OK){
   $('#compatBar').textContent='⚠ Material Web 组件库（vendor/mw-v2.js）加载失败，页面将仅显示无样式内容。请确认文件已部署。';
   $('#compatBar').classList.add('show');
 }
-$('#keyBtn').addEventListener('click',openKeyDialog);
 $('#railToggle').addEventListener('click',toggleRail);
 $('#railScrim').addEventListener('click',()=>setRail(false));
 document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&railOpen()) setRail(false); });
 $('#thBtn').addEventListener('click',openThemeDialog);
 $('#bgBtn').addEventListener('click',openBgDialog);
-// ?key=<webToken> one-click token access: store in localStorage and scrub from the address bar
-try{
-  const u=new URL(location.href);
-  const k=u.searchParams.has('key')?u.searchParams.get('key'):'';
-  if(k!=null){
-    if(k) localStorage.setItem('agw-admin-key',k); else localStorage.removeItem('agw-admin-key');
-    u.searchParams.delete('key'); history.replaceState(null,'',u);
-  }
-}catch(_){}
 upgradePwFields(document.body);
 // ---- Dynamic background: default gradient / aurora / uploaded image (stored in localStorage, per device) ----
 // The image never leaves the device: it is downscaled and re-encoded as JPEG before it reaches

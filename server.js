@@ -94,6 +94,7 @@ async function handleHttp(cfg, req, res) {
 // /admin is only reachable through /<sid>/admin (req._panelSid); a bare /admin stays 404.
   const allowed = p === '/v1' || p.startsWith('/v1/')
     || p === '/v1beta' || p.startsWith('/v1beta/')
+    || p === '/user' || p === '/user/'
     || p === '/plugins' || p.startsWith('/plugins/')
     || p === '/api/app' || p.startsWith('/api/app/')
     || (!!req._panelSid && (p === '/admin' || p.startsWith('/admin/')));
@@ -133,6 +134,30 @@ const u8 = utf8();   /* *chunk-safe decoding (2026-09-18) */
     req.on('end', () => go(pb));
     req.on('error', () => {});
     return;
+  }
+
+// ===== User portal (card holders): GET /user serves the page, GET /v1/me describes the card =====
+  if ((p === '/user' || p === '/user/') && req.method === 'GET') {
+    const f = path.join(__dirname, 'user', 'index.html');
+    fs.readFile(f, (err, buf) => {
+      if (err) return sendError('openai', res, 404, 'not found: ' + req.method + ' ' + p);
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store, no-cache, must-revalidate' });
+      res.end(buf);
+    });
+    return;
+  }
+  if (p === '/v1/me' && req.method === 'GET') {
+    const authR = checkAuth(cfg, req, u.searchParams);
+    if (!authR.ok) return sendError('openai', res, authR.status || 401, authR.error || 'invalid key');
+    const uk = authR.userKey || null;
+    if (!uk) return sendError('openai', res, 401, 'invalid key');
+    const info = keyCreditsJSON(uk);
+    info.role = uk.role === 'admin' ? 'admin' : 'user';
+    info.rpm = Number(uk.rpm) || 0;
+    info.tpm = Number(uk.tpm) || 0;
+    info.branches = availableBranches(cfg, uk);
+    res.writeHead(200, { 'Content-Type': 'application/json', ...corsHeaders() });
+    return res.end(JSON.stringify(info));
   }
 
 // ===== Accessible branch list (card auth, filtered by branches) =====

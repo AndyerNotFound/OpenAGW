@@ -74,7 +74,7 @@
 X-GC-Sign = HMAC_SHA256(token, ts \n nonce \n seq \n intentId \n METHOD \n pathname \n sha256(rawBody))
 ```
 
-校验顺序：凭据 → 头齐全 → ±5 分钟时间窗 → 插件归属（`pathname` 必须含 `/plugins/<id>/`）→ 序列号不回滚 → nonce 不重复 → 验签 → **立即消耗 seq+nonce** → 卡密有效（含 `branches` 实例白名单; 为空 = 仅发卡实例）→ 幂等命中回缓存。
+校验顺序：凭据 → 头齐全 → ±5 分钟时间窗 → 插件归属（`pathname` 必须含 `/plugins/<id>/`）→ 序列号不回滚 → nonce 不重复 → 验签 → **立即消耗 seq+nonce** → 卡密有效（含 `branches` 实例白名单; 为空 = 全部实例）→ 幂等命中回缓存。
 
 - **消耗时机**：HMAC 通过即落盘 seq/nonce。处理器提前返回（业务 400）也不会让同一份签名再次通过；伪造签名不推高 lastSeq。
 - **幂等在验签之后**：靠猜测 intentId 拿不到缓存响应。
@@ -150,5 +150,5 @@ ctx.registerRoute('POST', '/checkin', async (req, res, params) => {
 - **面板入口**：`/<sid>/admin/<token>`（`agw web login` 打印）。一次性链接只负责打开登录页，登录页要求管理员卡密；实例有卡密或二次验证时，会话必须经过登录页（`login:true`），旧式/待登录会话访问面板与管理 API 一律 401。无 Cookie/Token 访问管理端点 401，sid/token 不匹配 404。
 - **管理员 key 不能聊天**：`checkAuth` 看到 `role="admin"` 返回 403，即使 `quotaTokens` 设为 0 也不能绕过。
 - **发卡与改权**：`POST /admin/api/keys/:inst` 接受 `role`、`rpm`、`tpm`、`models`、`channels`、`branches`；`POST /admin/api/keys-update/:inst` 可改，`resetRate: true` 清空限流窗口。
-- **跨实例**：卡密归属发卡实例；`branches` 为空时只能用于发卡实例，列出的其他实例需显式授权。额度、用量与限流窗口都记在发卡实例上。
+- **跨实例**：卡密归属发卡实例；`branches` 为空时不限制实例，非空时仅可使用列出的实例（发卡实例也需列出才能用）。额度、用量与限流窗口都记在发卡实例上。
 - **单实例同步**：`hotReload()` 在单实例模式会自动把磁盘上的 `apiKeys` 同步到内存，新密钥立即生效。
